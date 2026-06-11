@@ -14,6 +14,18 @@ type OrderHandler struct {
 	svc service.OrderService
 }
 
+// CreatePaymentIntent godoc
+// @Summary     Create a Stripe payment intent for an order
+// @Tags        orders
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.CreatePaymentIntentInput true "Order ID"
+// @Success     200 {object} response.APIResponse
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     404 {object} response.ErrorResponse
+// @Router      /orders/payment/intent [post]
 func (h *OrderHandler) CreatePaymentIntent(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -37,6 +49,16 @@ func (h *OrderHandler) CreatePaymentIntent(ctx *fiber.Ctx) error {
 	return response.OK(ctx, pi)
 }
 
+// StripeWebhook godoc
+// @Summary     Stripe webhook receiver
+// @Description Receives and processes Stripe payment events. Should only be called by Stripe.
+// @Tags        orders
+// @Accept      json
+// @Produce     json
+// @Param       Stripe-Signature header string true "Stripe webhook signature"
+// @Success     200
+// @Failure     400 {object} response.ErrorResponse
+// @Router      /orders/payment/webhook [post]
 func (h *OrderHandler) StripeWebhook(ctx *fiber.Ctx) error {
 	signature := ctx.Get("Stripe-Signature")
 	if err := h.svc.HandleStripeEvent(ctx.Body(), signature); err != nil {

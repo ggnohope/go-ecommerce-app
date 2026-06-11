@@ -19,6 +19,16 @@ type UserHandler struct {
 
 // ── Public ────────────────────────────────────────────────────────────────────
 
+// Register godoc
+// @Summary     Register a new user
+// @Tags        auth
+// @Accept      json
+// @Produce     json
+// @Param       body body dto.UserSignUp true "Registration details"
+// @Success     201 {object} response.APIResponse{data=dto.TokenPair}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     429 {object} response.ErrorResponse
+// @Router      /user/register [post]
 func (h *UserHandler) Register(ctx *fiber.Ctx) error {
 	var input dto.UserSignUp
 	if err := ctx.BodyParser(&input); err != nil {
@@ -39,6 +49,16 @@ func (h *UserHandler) Register(ctx *fiber.Ctx) error {
 	return response.Created(ctx, pair)
 }
 
+// Login godoc
+// @Summary     Login with email and password
+// @Tags        auth
+// @Accept      json
+// @Produce     json
+// @Param       body body dto.UserLogin true "Login credentials"
+// @Success     200 {object} response.APIResponse{data=dto.TokenPair}
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     429 {object} response.ErrorResponse
+// @Router      /user/login [post]
 func (h *UserHandler) Login(ctx *fiber.Ctx) error {
 	var input dto.UserLogin
 	if err := ctx.BodyParser(&input); err != nil {
@@ -51,7 +71,18 @@ func (h *UserHandler) Login(ctx *fiber.Ctx) error {
 	return response.OK(ctx, pair)
 }
 
-// Refresh exchanges a valid refresh token for a new access + refresh token pair.
+// Refresh godoc
+// @Summary     Refresh access token
+// @Description Exchange a valid refresh token for a new access + refresh token pair (rotation).
+// @Tags        auth
+// @Accept      json
+// @Produce     json
+// @Param       body body dto.RefreshTokenInput true "Refresh token"
+// @Success     200 {object} response.APIResponse{data=dto.TokenPair}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     429 {object} response.ErrorResponse
+// @Router      /user/refresh [post]
 func (h *UserHandler) Refresh(ctx *fiber.Ctx) error {
 	var input dto.RefreshTokenInput
 	if err := ctx.BodyParser(&input); err != nil || input.RefreshToken == "" {
@@ -64,7 +95,15 @@ func (h *UserHandler) Refresh(ctx *fiber.Ctx) error {
 	return response.OK(ctx, pair)
 }
 
-// Logout revokes the supplied refresh token.
+// Logout godoc
+// @Summary     Logout (revoke refresh token)
+// @Tags        auth
+// @Accept      json
+// @Produce     json
+// @Param       body body dto.RefreshTokenInput true "Refresh token to revoke"
+// @Success     204
+// @Failure     400 {object} response.ErrorResponse
+// @Router      /user/logout [post]
 func (h *UserHandler) Logout(ctx *fiber.Ctx) error {
 	var input dto.RefreshTokenInput
 	if err := ctx.BodyParser(&input); err != nil || input.RefreshToken == "" {
@@ -78,7 +117,15 @@ func (h *UserHandler) Logout(ctx *fiber.Ctx) error {
 
 // ── Protected ─────────────────────────────────────────────────────────────────
 
-// LogoutAll revokes every refresh token for the authenticated user.
+// LogoutAll godoc
+// @Summary     Logout from all devices
+// @Description Revokes every refresh token for the authenticated user.
+// @Tags        auth
+// @Produce     json
+// @Security    BearerAuth
+// @Success     204
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/logout-all [post]
 func (h *UserHandler) LogoutAll(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -90,6 +137,16 @@ func (h *UserHandler) LogoutAll(ctx *fiber.Ctx) error {
 	return response.NoContent(ctx)
 }
 
+// GetVerificationCode godoc
+// @Summary     Request account verification code
+// @Description Sends an OTP to the user's registered contact.
+// @Tags        verification
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} response.APIResponse
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/verify [get]
 func (h *UserHandler) GetVerificationCode(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -101,6 +158,17 @@ func (h *UserHandler) GetVerificationCode(ctx *fiber.Ctx) error {
 	return response.OK(ctx, fiber.Map{"message": "verification code sent"})
 }
 
+// Verify godoc
+// @Summary     Verify account with OTP code
+// @Tags        verification
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.VerifyUser true "OTP code"
+// @Success     200 {object} response.APIResponse
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/verify [post]
 func (h *UserHandler) Verify(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -118,6 +186,15 @@ func (h *UserHandler) Verify(ctx *fiber.Ctx) error {
 
 // ── Profile ───────────────────────────────────────────────────────────────────
 
+// GetProfile godoc
+// @Summary     Get current user profile
+// @Tags        profile
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} response.APIResponse{data=domain.User}
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     404 {object} response.ErrorResponse
+// @Router      /user/me/profile [get]
 func (h *UserHandler) GetProfile(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -132,6 +209,17 @@ func (h *UserHandler) GetProfile(ctx *fiber.Ctx) error {
 	return response.OK(ctx, profile)
 }
 
+// CreateProfile godoc
+// @Summary     Update user profile
+// @Tags        profile
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.UserProfile true "Profile fields"
+// @Success     200 {object} response.APIResponse
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/profile [post]
 func (h *UserHandler) CreateProfile(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -147,6 +235,15 @@ func (h *UserHandler) CreateProfile(ctx *fiber.Ctx) error {
 	return response.OK(ctx, fiber.Map{"message": "profile updated"})
 }
 
+// BecomeSeller godoc
+// @Summary     Upgrade account to seller
+// @Tags        profile
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} response.APIResponse
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/become-seller [post]
 func (h *UserHandler) BecomeSeller(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -160,6 +257,14 @@ func (h *UserHandler) BecomeSeller(ctx *fiber.Ctx) error {
 
 // ── Addresses ─────────────────────────────────────────────────────────────────
 
+// GetAddresses godoc
+// @Summary     List user addresses
+// @Tags        addresses
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} response.APIResponse{data=[]domain.Address}
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/address [get]
 func (h *UserHandler) GetAddresses(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -172,6 +277,17 @@ func (h *UserHandler) GetAddresses(ctx *fiber.Ctx) error {
 	return response.OK(ctx, addresses)
 }
 
+// AddAddress godoc
+// @Summary     Add a shipping address
+// @Tags        addresses
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.AddressInput true "Address details"
+// @Success     201 {object} response.APIResponse{data=domain.Address}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/address [post]
 func (h *UserHandler) AddAddress(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -188,6 +304,20 @@ func (h *UserHandler) AddAddress(ctx *fiber.Ctx) error {
 	return response.Created(ctx, addr)
 }
 
+// UpdateAddress godoc
+// @Summary     Update a shipping address
+// @Tags        addresses
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       id   path int              true "Address ID"
+// @Param       body body dto.AddressInput true "Updated address details"
+// @Success     200 {object} response.APIResponse{data=domain.Address}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Failure     404 {object} response.ErrorResponse
+// @Router      /user/me/address/{id} [put]
 func (h *UserHandler) UpdateAddress(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -214,6 +344,17 @@ func (h *UserHandler) UpdateAddress(ctx *fiber.Ctx) error {
 	return response.OK(ctx, addr)
 }
 
+// DeleteAddress godoc
+// @Summary     Delete a shipping address
+// @Tags        addresses
+// @Produce     json
+// @Security    BearerAuth
+// @Param       id path int true "Address ID"
+// @Success     204
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Failure     404 {object} response.ErrorResponse
+// @Router      /user/me/address/{id} [delete]
 func (h *UserHandler) DeleteAddress(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -237,6 +378,17 @@ func (h *UserHandler) DeleteAddress(ctx *fiber.Ctx) error {
 
 // ── Cart ──────────────────────────────────────────────────────────────────────
 
+// AddToCart godoc
+// @Summary     Add item to cart
+// @Tags        cart
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.AddToCartInput true "Product and quantity"
+// @Success     200 {object} response.APIResponse{data=domain.Cart}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/cart [post]
 func (h *UserHandler) AddToCart(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -253,6 +405,14 @@ func (h *UserHandler) AddToCart(ctx *fiber.Ctx) error {
 	return response.OK(ctx, cart)
 }
 
+// GetCart godoc
+// @Summary     Get current user's cart
+// @Tags        cart
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} response.APIResponse{data=domain.Cart}
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/cart [get]
 func (h *UserHandler) GetCart(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -265,6 +425,16 @@ func (h *UserHandler) GetCart(ctx *fiber.Ctx) error {
 	return response.OK(ctx, cart)
 }
 
+// RemoveFromCart godoc
+// @Summary     Remove item from cart
+// @Tags        cart
+// @Produce     json
+// @Security    BearerAuth
+// @Param       item_id path int true "Cart item ID"
+// @Success     204
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/cart/{item_id} [delete]
 func (h *UserHandler) RemoveFromCart(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -282,6 +452,17 @@ func (h *UserHandler) RemoveFromCart(ctx *fiber.Ctx) error {
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 
+// PlaceOrder godoc
+// @Summary     Place an order from cart
+// @Tags        orders
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.PlaceOrderInput true "Shipping address"
+// @Success     201 {object} response.APIResponse{data=domain.Order}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/order [post]
 func (h *UserHandler) PlaceOrder(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -298,6 +479,14 @@ func (h *UserHandler) PlaceOrder(ctx *fiber.Ctx) error {
 	return response.Created(ctx, order)
 }
 
+// GetOrders godoc
+// @Summary     List current user's orders
+// @Tags        orders
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} response.APIResponse{data=[]domain.Order}
+// @Failure     401 {object} response.ErrorResponse
+// @Router      /user/me/order [get]
 func (h *UserHandler) GetOrders(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -310,6 +499,16 @@ func (h *UserHandler) GetOrders(ctx *fiber.Ctx) error {
 	return response.OK(ctx, orders)
 }
 
+// GetOrder godoc
+// @Summary     Get a single order by ID
+// @Tags        orders
+// @Produce     json
+// @Security    BearerAuth
+// @Param       id path int true "Order ID"
+// @Success     200 {object} response.APIResponse{data=domain.Order}
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     404 {object} response.ErrorResponse
+// @Router      /user/me/order/{id} [get]
 func (h *UserHandler) GetOrder(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {

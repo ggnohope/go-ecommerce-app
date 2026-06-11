@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	fiberswagger "github.com/gofiber/swagger"
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -87,6 +88,8 @@ func StartServer(config configs.AppConfig) {
 	handlers.SetupProductRoutes(&h)
 	handlers.SetupSellerRoutes(&h)
 	handlers.SetupOrderRoutes(&h)
+
+	app.Get("/swagger/*", fiberswagger.HandlerDefault)
 
 	// Graceful shutdown: wait for SIGINT / SIGTERM, then drain in-flight requests.
 	quit := make(chan os.Signal, 1)

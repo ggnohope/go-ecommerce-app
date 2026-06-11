@@ -14,6 +14,18 @@ type SellerHandler struct {
 	svc service.ProductService
 }
 
+// CreateProduct godoc
+// @Summary     Create a new product
+// @Tags        seller
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.CreateProductInput true "Product details"
+// @Success     201 {object} response.APIResponse{data=domain.Product}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Router      /seller/product [post]
 func (h *SellerHandler) CreateProduct(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -30,6 +42,15 @@ func (h *SellerHandler) CreateProduct(ctx *fiber.Ctx) error {
 	return response.Created(ctx, product)
 }
 
+// GetSellerProducts godoc
+// @Summary     List products belonging to the authenticated seller
+// @Tags        seller
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {object} response.APIResponse{data=[]domain.Product}
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Router      /seller/products [get]
 func (h *SellerHandler) GetSellerProducts(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -42,6 +63,20 @@ func (h *SellerHandler) GetSellerProducts(ctx *fiber.Ctx) error {
 	return response.OK(ctx, products)
 }
 
+// UpdateProduct godoc
+// @Summary     Update a product
+// @Tags        seller
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       id   path int                   true "Product ID"
+// @Param       body body dto.UpdateProductInput true "Updated product fields"
+// @Success     200 {object} response.APIResponse{data=domain.Product}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Failure     404 {object} response.ErrorResponse
+// @Router      /seller/product/{id} [put]
 func (h *SellerHandler) UpdateProduct(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -69,6 +104,17 @@ func (h *SellerHandler) UpdateProduct(ctx *fiber.Ctx) error {
 	return response.OK(ctx, product)
 }
 
+// DeleteProduct godoc
+// @Summary     Delete a product
+// @Tags        seller
+// @Produce     json
+// @Security    BearerAuth
+// @Param       id path int true "Product ID"
+// @Success     204
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Failure     404 {object} response.ErrorResponse
+// @Router      /seller/product/{id} [delete]
 func (h *SellerHandler) DeleteProduct(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -91,6 +137,19 @@ func (h *SellerHandler) DeleteProduct(ctx *fiber.Ctx) error {
 	return response.NoContent(ctx)
 }
 
+// UploadProductImage godoc
+// @Summary     Upload a product image to S3
+// @Tags        seller
+// @Accept      multipart/form-data
+// @Produce     json
+// @Security    BearerAuth
+// @Param       id    path  int  true "Product ID"
+// @Param       image formData file true "Image file"
+// @Success     201 {object} response.APIResponse{data=domain.ProductImage}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Router      /seller/product/{id}/image [post]
 func (h *SellerHandler) UploadProductImage(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
@@ -121,6 +180,18 @@ func (h *SellerHandler) UploadProductImage(ctx *fiber.Ctx) error {
 	return response.Created(ctx, image)
 }
 
+// CreateCategory godoc
+// @Summary     Create a product category
+// @Tags        seller
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body dto.CreateCategoryInput true "Category details"
+// @Success     201 {object} response.APIResponse{data=domain.Category}
+// @Failure     400 {object} response.ErrorResponse
+// @Failure     401 {object} response.ErrorResponse
+// @Failure     403 {object} response.ErrorResponse
+// @Router      /seller/category [post]
 func (h *SellerHandler) CreateCategory(ctx *fiber.Ctx) error {
 	var input dto.CreateCategoryInput
 	if err := ctx.BodyParser(&input); err != nil {

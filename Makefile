@@ -1,4 +1,4 @@
-.PHONY: server build dev install-dev
+.PHONY: server build dev install-dev swagger
 
 build:
 	go build -o bin/ecommerce main.go
@@ -12,3 +12,6 @@ dev:
 
 install-dev:
 	go install github.com/air-verse/air@latest
+
+swagger:
+	swag init -g main.go -o docs --parseDependency --parseInternal

@@ -16,11 +16,32 @@ type paginatedEnvelope struct {
 	Meta *Meta `json:"meta"`
 }
 
+// Meta holds pagination metadata returned in list responses.
 type Meta struct {
 	Page  int   `json:"page"`
 	Limit int   `json:"limit"`
 	Total int64 `json:"total"`
 	Pages int   `json:"pages"`
+}
+
+// APIResponse is the standard envelope for successful responses.
+// swagger:model
+type APIResponse struct {
+	Data  any    `json:"data,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// ErrorResponse is the envelope returned on error responses.
+// swagger:model
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
+// PaginatedAPIResponse is the envelope for paginated list responses.
+// swagger:model
+type PaginatedAPIResponse struct {
+	Data any   `json:"data"`
+	Meta *Meta `json:"meta"`
 }
 
 func OK(ctx *fiber.Ctx, data any) error {
