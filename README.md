@@ -169,6 +169,7 @@ make run                    # hot-reload via Air
 | `STRIPE_WEBHOOK_SECRET` | optional | Stripe webhook signing secret |
 
 Optional services start as `nil` — the server starts normally and all other endpoints function.
+See [docs/SERVICES_SETUP.md](docs/SERVICES_SETUP.md) for a step-by-step guide to configuring S3, SQS, and Stripe.
 
 ---
 
