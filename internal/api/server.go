@@ -20,20 +20,36 @@ func StartServer(config configs.AppConfig) {
 	if err != nil {
 		log.Fatalf("Database connection error: %v\n", err)
 	}
-
 	log.Println("Database connection established")
 
-	db.AutoMigrate(&domain.User{})
+	db.AutoMigrate(
+		&domain.User{},
+		&domain.Category{},
+		&domain.Product{},
+		&domain.ProductImage{},
+		&domain.Cart{},
+		&domain.CartItem{},
+		&domain.Address{},
+		&domain.Order{},
+		&domain.OrderItem{},
+	)
 
 	auth := helper.NewAuth(config.AppSecret)
-	restHandler := rest.RestHandler{
+	h := rest.RestHandler{
 		App:                app,
 		DB:                 db,
 		Auth:               auth,
 		NotificationClient: config.EmailNotification,
+		S3Client:           config.S3Client,
+		SQSClient:          config.SQSClient,
+		StripeClient:       config.StripeClient,
 	}
 
-	handlers.SetupUserRoutes(&restHandler)
+	handlers.SetupUserRoutes(&h)
+	handlers.SetupProductRoutes(&h)
+	handlers.SetupSellerRoutes(&h)
+	handlers.SetupOrderRoutes(&h)
 
+	log.Printf("Server starting on %s", config.ServerPort)
 	app.Listen(config.ServerPort)
 }

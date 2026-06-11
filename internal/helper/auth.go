@@ -128,8 +128,17 @@ func (a *Auth) Authorize(ctx *fiber.Ctx) error {
 
 func (a *Auth) GetCurrentUser(ctx *fiber.Ctx) domain.User {
 	user := ctx.Locals("user")
-
 	return user.(domain.User)
+}
+
+func (a *Auth) SellerOnly(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok || user.UserType != "seller" {
+		return ctx.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"message": "seller access required",
+		})
+	}
+	return ctx.Next()
 }
 
 func (a *Auth) GenerateCode() (string, error) {
