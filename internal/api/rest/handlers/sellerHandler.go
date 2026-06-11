@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"go-ecommerce-app/internal/api/response"
 	"go-ecommerce-app/internal/api/rest"
 	"go-ecommerce-app/internal/domain"
 	"go-ecommerce-app/internal/dto"
@@ -16,105 +17,96 @@ type SellerHandler struct {
 func (h *SellerHandler) CreateProduct(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
-		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+		return response.Unauthorized(ctx, "unauthorized")
 	}
-
 	var input dto.CreateProductInput
 	if err := ctx.BodyParser(&input); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid request body"})
+		return response.BadRequest(ctx, "invalid request body")
 	}
-
 	product, err := h.svc.CreateProduct(user.ID, input)
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
+		return response.BadRequest(ctx, err.Error())
 	}
-	return ctx.Status(fiber.StatusCreated).JSON(fiber.Map{"data": product})
+	return response.Created(ctx, product)
 }
 
 func (h *SellerHandler) GetSellerProducts(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
-		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+		return response.Unauthorized(ctx, "unauthorized")
 	}
-
 	products, err := h.svc.GetSellerProducts(user.ID)
 	if err != nil {
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
+		return response.InternalError(ctx)
 	}
-	return ctx.JSON(fiber.Map{"data": products})
+	return response.OK(ctx, products)
 }
 
 func (h *SellerHandler) UpdateProduct(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
-		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+		return response.Unauthorized(ctx, "unauthorized")
 	}
-
 	id, err := ctx.ParamsInt("id")
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid product id"})
+		return response.BadRequest(ctx, "invalid product id")
 	}
-
 	var input dto.UpdateProductInput
 	if err = ctx.BodyParser(&input); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid request body"})
+		return response.BadRequest(ctx, "invalid request body")
 	}
-
 	product, err := h.svc.UpdateProduct(uint(id), user.ID, input)
 	if err != nil {
-		status := fiber.StatusInternalServerError
-		if err.Error() == "unauthorized" {
-			status = fiber.StatusForbidden
-		} else if err.Error() == "product not found" {
-			status = fiber.StatusNotFound
+		switch err.Error() {
+		case "unauthorized":
+			return response.Forbidden(ctx, err.Error())
+		case "product not found":
+			return response.NotFound(ctx, err.Error())
+		default:
+			return response.InternalError(ctx)
 		}
-		return ctx.Status(status).JSON(fiber.Map{"message": err.Error()})
 	}
-	return ctx.JSON(fiber.Map{"data": product})
+	return response.OK(ctx, product)
 }
 
 func (h *SellerHandler) DeleteProduct(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
-		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+		return response.Unauthorized(ctx, "unauthorized")
 	}
-
 	id, err := ctx.ParamsInt("id")
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid product id"})
+		return response.BadRequest(ctx, "invalid product id")
 	}
-
 	if err = h.svc.DeleteProduct(uint(id), user.ID); err != nil {
-		status := fiber.StatusInternalServerError
-		if err.Error() == "unauthorized" {
-			status = fiber.StatusForbidden
-		} else if err.Error() == "product not found" {
-			status = fiber.StatusNotFound
+		switch err.Error() {
+		case "unauthorized":
+			return response.Forbidden(ctx, err.Error())
+		case "product not found":
+			return response.NotFound(ctx, err.Error())
+		default:
+			return response.InternalError(ctx)
 		}
-		return ctx.Status(status).JSON(fiber.Map{"message": err.Error()})
 	}
-	return ctx.Status(fiber.StatusNoContent).Send(nil)
+	return response.NoContent(ctx)
 }
 
 func (h *SellerHandler) UploadProductImage(ctx *fiber.Ctx) error {
 	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
-		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+		return response.Unauthorized(ctx, "unauthorized")
 	}
-
 	id, err := ctx.ParamsInt("id")
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid product id"})
+		return response.BadRequest(ctx, "invalid product id")
 	}
-
 	file, err := ctx.FormFile("image")
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "image file is required"})
+		return response.BadRequest(ctx, "image file is required")
 	}
-
 	f, err := file.Open()
 	if err != nil {
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "failed to read file"})
+		return response.InternalError(ctx)
 	}
 	defer f.Close()
 
@@ -122,35 +114,32 @@ func (h *SellerHandler) UploadProductImage(ctx *fiber.Ctx) error {
 	if contentType == "" {
 		contentType = "image/jpeg"
 	}
-
 	image, err := h.svc.UploadProductImage(uint(id), user.ID, file.Filename, f, contentType)
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
+		return response.BadRequest(ctx, err.Error())
 	}
-	return ctx.Status(fiber.StatusCreated).JSON(fiber.Map{"data": image})
+	return response.Created(ctx, image)
 }
 
 func (h *SellerHandler) CreateCategory(ctx *fiber.Ctx) error {
 	var input dto.CreateCategoryInput
 	if err := ctx.BodyParser(&input); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid request body"})
+		return response.BadRequest(ctx, "invalid request body")
 	}
 	category, err := h.svc.CreateCategory(input)
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
+		return response.BadRequest(ctx, err.Error())
 	}
-	return ctx.Status(fiber.StatusCreated).JSON(fiber.Map{"data": category})
+	return response.Created(ctx, category)
 }
 
 func SetupSellerRoutes(restHandler *rest.RestHandler) {
-	productSvc := service.NewProductService(restHandler.DB, restHandler.S3Client)
-	h := SellerHandler{svc: productSvc}
+	h := SellerHandler{svc: service.NewProductService(restHandler.DB, restHandler.S3Client)}
 
 	seller := restHandler.App.Group("/seller",
 		restHandler.Auth.Authorize,
 		restHandler.Auth.SellerOnly,
 	)
-
 	seller.Post("/product", h.CreateProduct)
 	seller.Get("/products", h.GetSellerProducts)
 	seller.Put("/product/:id", h.UpdateProduct)

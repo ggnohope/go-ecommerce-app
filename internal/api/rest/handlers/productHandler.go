@@ -1,10 +1,10 @@
 package handlers
 
 import (
+	"go-ecommerce-app/internal/api/response"
 	"go-ecommerce-app/internal/api/rest"
 	"go-ecommerce-app/internal/dto"
 	"go-ecommerce-app/internal/service"
-	"go-ecommerce-app/pkg/storage"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -16,46 +16,47 @@ type ProductHandler struct {
 func (h *ProductHandler) GetProducts(ctx *fiber.Ctx) error {
 	var filter dto.ProductFilter
 	if err := ctx.QueryParser(&filter); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid query params"})
+		return response.BadRequest(ctx, "invalid query params")
 	}
 	products, total, err := h.svc.GetProducts(filter)
 	if err != nil {
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
+		return response.InternalError(ctx)
 	}
-	return ctx.JSON(fiber.Map{"data": products, "total": total})
+	page, limit := filter.Page, filter.Limit
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	return response.Paginated(ctx, products, page, limit, total)
 }
 
 func (h *ProductHandler) GetProduct(ctx *fiber.Ctx) error {
 	id, err := ctx.ParamsInt("id")
 	if err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid product id"})
+		return response.BadRequest(ctx, "invalid product id")
 	}
 	product, err := h.svc.GetProduct(uint(id))
 	if err != nil {
-		return ctx.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": err.Error()})
+		return response.NotFound(ctx, "product not found")
 	}
-	return ctx.JSON(fiber.Map{"data": product})
+	return response.OK(ctx, product)
 }
 
 func (h *ProductHandler) GetCategories(ctx *fiber.Ctx) error {
 	categories, err := h.svc.GetCategories()
 	if err != nil {
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
+		return response.InternalError(ctx)
 	}
-	return ctx.JSON(fiber.Map{"data": categories})
+	return response.OK(ctx, categories)
 }
 
 func SetupProductRoutes(restHandler *rest.RestHandler) {
-	var s3Client *storage.S3Client
-	if restHandler.S3Client != nil {
-		s3Client = restHandler.S3Client
-	}
+	h := ProductHandler{svc: service.NewProductService(restHandler.DB, restHandler.S3Client)}
 
-	productSvc := service.NewProductService(restHandler.DB, s3Client)
-	h := ProductHandler{svc: productSvc}
+	restHandler.App.Get("/products", h.GetProducts)
+	restHandler.App.Get("/products/:id", h.GetProduct)
+	restHandler.App.Get("/categories", h.GetCategories)
 
-	app := restHandler.App
-	app.Get("/products", h.GetProducts)
-	app.Get("/products/:id", h.GetProduct)
-	app.Get("/categories", h.GetCategories)
 }
