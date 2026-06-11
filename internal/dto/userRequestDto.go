@@ -33,3 +33,15 @@ type AddToCartInput struct {
 	ProductID uint `json:"product_id"`
 	Quantity  int  `json:"quantity"`
 }
+
+// TokenPair is returned by login, register, and refresh endpoints.
+type TokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"` // access token TTL in seconds
+}
+
+type RefreshTokenInput struct {
+	RefreshToken string `json:"refresh_token"`
+}
