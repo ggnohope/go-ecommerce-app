@@ -14,4 +14,5 @@ install-dev:
 	go install github.com/air-verse/air@latest
 
 swagger:
-	swag init -g main.go -o docs --parseDependency --parseInternal
+	@command -v swag >/dev/null 2>&1 || go install github.com/swaggo/swag/cmd/swag@latest
+	$(shell go env GOPATH)/bin/swag init -g main.go -o docs --parseDependency --parseInternal
