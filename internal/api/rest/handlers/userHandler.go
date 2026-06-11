@@ -5,210 +5,241 @@ import (
 	"go-ecommerce-app/internal/domain"
 	"go-ecommerce-app/internal/dto"
 	"go-ecommerce-app/internal/service"
-	"go-ecommerce-app/pkg/notification"
 
 	"github.com/gofiber/fiber/v2"
 )
 
 type UserHandler struct {
-	service service.UserService
+	svc      service.UserService
+	cartSvc  service.CartService
+	orderSvc service.OrderService
 }
 
 // ====================
 // Public handlers
 // ====================
 
-func (userHandler *UserHandler) Register(context *fiber.Ctx) error {
-
-	user := dto.UserSignUp{}
-	err := context.BodyParser(&user)
-
-	if err != nil {
-		return context.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"message": "Invalid credentials",
-		})
+func (h *UserHandler) Register(ctx *fiber.Ctx) error {
+	var user dto.UserSignUp
+	if err := ctx.BodyParser(&user); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid credentials"})
 	}
-
-	// Validate email is provided
 	if user.Email == "" {
-		return context.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"message": "Email is required",
-		})
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "email is required"})
 	}
-
-	// Validate phone is provided
 	if user.Phone == "" {
-		return context.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"message": "Phone is required",
-		})
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "phone is required"})
 	}
-
-	// Validate password length
 	if len(user.Password) < 6 {
-		return context.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"message": "Password must be at least 6 characters",
-		})
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "password must be at least 6 characters"})
 	}
-
-	token, err := userHandler.service.SignUp(user)
-
+	token, err := h.svc.SignUp(user)
 	if err != nil {
-		return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"message": err.Error(),
-		})
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
 	}
-
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"data": token,
-	})
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": token})
 }
 
-func (userHandler *UserHandler) Login(context *fiber.Ctx) error {
-	loginInput := dto.UserLogin{}
-	err := context.BodyParser(&loginInput)
-	if err != nil {
-		return context.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"message": "Invalid credentials",
-		})
+func (h *UserHandler) Login(ctx *fiber.Ctx) error {
+	var input dto.UserLogin
+	if err := ctx.BodyParser(&input); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid credentials"})
 	}
-
-	token, err := userHandler.service.Login(loginInput.Email, loginInput.Password)
+	token, err := h.svc.Login(input.Email, input.Password)
 	if err != nil {
-		return context.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"message": err.Error(),
-		})
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": err.Error()})
 	}
-
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"data": token,
-	})
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": token})
 }
 
 // ====================
-// Private handlers
+// Protected handlers
 // ====================
 
-func (userHandler *UserHandler) GetVerificationCode(context *fiber.Ctx) error {
-	user, ok := context.Locals("user").(domain.User)
+func (h *UserHandler) GetVerificationCode(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
-		return context.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"message": "invalid user context",
-		})
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "invalid user context"})
 	}
-	code, err := userHandler.service.GetVerificationCode(user.ID)
+	code, err := h.svc.GetVerificationCode(user.ID)
 	if err != nil {
-		// Return 400 for validation errors (invalid phone/email)
-		if notification.IsValidationError(err) {
-			return context.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"message": err.Error(),
-			})
-		}
-		// Return 500 for server/delivery errors
-		return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"message": err.Error(),
-		})
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
 	}
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"data": code,
-	})
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": code})
 }
 
-func (userHandler *UserHandler) Verify(context *fiber.Ctx) error {
-	user, ok := context.Locals("user").(domain.User)
+func (h *UserHandler) Verify(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
 	if !ok {
-		return context.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"message": "invalid user context",
-		})
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "invalid user context"})
 	}
+	var input dto.VerifyUser
+	if err := ctx.BodyParser(&input); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid verification code"})
+	}
+	if err := h.svc.Verify(user.ID, input.Code); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"message": "verified successfully"})
+}
 
-	verifyInput := dto.VerifyUser{}
-	err := context.BodyParser(&verifyInput)
+func (h *UserHandler) CreateProfile(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	var input dto.UserProfile
+	if err := ctx.BodyParser(&input); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid request body"})
+	}
+	if err := h.svc.CreateProfile(user.ID, input); err != nil {
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"message": "profile updated"})
+}
+
+func (h *UserHandler) GetProfile(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	profile, err := h.svc.GetProfile(user.ID)
 	if err != nil {
-		return context.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"message": "Invalid verification code",
-		})
+		return ctx.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": "profile not found"})
 	}
+	profile.Password = ""
+	profile.Code = ""
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": profile})
+}
 
-	err = userHandler.service.Verify(user.ID, verifyInput.Code)
+func (h *UserHandler) BecomeSeller(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	if err := h.svc.BecomeSeller(user.ID); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"message": "seller account activated"})
+}
+
+// Cart
+
+func (h *UserHandler) AddToCart(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	var input dto.AddToCartInput
+	if err := ctx.BodyParser(&input); err != nil || input.ProductID == 0 {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "product_id is required"})
+	}
+	cart, err := h.cartSvc.AddToCart(user.ID, input)
 	if err != nil {
-		return context.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"message": err.Error(),
-		})
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
 	}
-
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"message": "verified successfully",
-	})
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": cart})
 }
 
-func (userHandler *UserHandler) CreateProfile(context *fiber.Ctx) error {
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"message": "profile created",
-	})
+func (h *UserHandler) GetCart(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	cart, err := h.cartSvc.GetCart(user.ID)
+	if err != nil {
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": cart})
 }
 
-func (userHandler *UserHandler) GetProfile(context *fiber.Ctx) error {
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"name": "Hoa",
-		"age":  22,
-	})
+func (h *UserHandler) RemoveFromCart(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	itemID, err := ctx.ParamsInt("item_id")
+	if err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid item id"})
+	}
+	if err = h.cartSvc.RemoveFromCart(user.ID, uint(itemID)); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"message": "item removed from cart"})
 }
 
-func (userHandler *UserHandler) AddToCart(context *fiber.Ctx) error {
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"message": "added to cart",
-	})
+// Orders
+
+func (h *UserHandler) PlaceOrder(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	var input dto.PlaceOrderInput
+	if err := ctx.BodyParser(&input); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid request body"})
+	}
+	order, err := h.orderSvc.PlaceOrder(user.ID, input)
+	if err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusCreated).JSON(fiber.Map{"data": order})
 }
 
-func (userHandler *UserHandler) GetCart(context *fiber.Ctx) error {
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"items": []string{
-			"iphone",
-			"macbook",
-		},
-	})
+func (h *UserHandler) GetOrders(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	orders, err := h.orderSvc.GetOrders(user.ID)
+	if err != nil {
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": orders})
 }
 
-func (userHandler *UserHandler) GetOrders(context *fiber.Ctx) error {
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"message": "all orders",
-	})
-}
-
-func (userHandler *UserHandler) GetOrder(context *fiber.Ctx) error {
-	id := context.Params("id")
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"orderId": id,
-	})
-}
-
-func (userHandler *UserHandler) BecomeSeller(context *fiber.Ctx) error {
-	return context.Status(fiber.StatusOK).JSON(fiber.Map{
-		"message": "become seller success",
-	})
+func (h *UserHandler) GetOrder(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return ctx.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "unauthorized"})
+	}
+	id, err := ctx.ParamsInt("id")
+	if err != nil {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "invalid order id"})
+	}
+	order, err := h.orderSvc.GetOrder(uint(id), user.ID)
+	if err != nil {
+		return ctx.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": err.Error()})
+	}
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{"data": order})
 }
 
 func SetupUserRoutes(restHandler *rest.RestHandler) {
-	app := restHandler.App
+	userSvc := service.NewUserService(restHandler.DB, restHandler.Auth, restHandler.NotificationClient)
+	cartSvc := service.NewCartService(restHandler.DB)
+	orderSvc := service.NewOrderService(restHandler.DB, restHandler.SQSClient, restHandler.StripeClient)
 
-	userService := service.NewUserService(restHandler.DB, restHandler.Auth, restHandler.NotificationClient)
-	handler := UserHandler{
-		service: userService,
+	h := UserHandler{
+		svc:      userSvc,
+		cartSvc:  cartSvc,
+		orderSvc: orderSvc,
 	}
 
-	pubRoutes := app.Group("/user")
+	pubRoutes := restHandler.App.Group("/user")
 	privateRoutes := pubRoutes.Group("/me", restHandler.Auth.Authorize)
 
-	pubRoutes.Post("/register", handler.Register)
-	pubRoutes.Post("/login", handler.Login)
+	pubRoutes.Post("/register", h.Register)
+	pubRoutes.Post("/login", h.Login)
 
-	privateRoutes.Get("/verify", handler.GetVerificationCode)
-	privateRoutes.Post("/verify", handler.Verify)
-	privateRoutes.Post("/profile", handler.CreateProfile)
-	privateRoutes.Get("/profile", handler.GetProfile)
-	privateRoutes.Post("/cart", handler.AddToCart)
-	privateRoutes.Get("/cart", handler.GetCart)
-	privateRoutes.Get("/order", handler.GetOrders)
-	privateRoutes.Get("/order/:id", handler.GetOrder)
-	privateRoutes.Post("/become-seller", handler.BecomeSeller)
+	privateRoutes.Get("/verify", h.GetVerificationCode)
+	privateRoutes.Post("/verify", h.Verify)
+	privateRoutes.Get("/profile", h.GetProfile)
+	privateRoutes.Post("/profile", h.CreateProfile)
+	privateRoutes.Post("/cart", h.AddToCart)
+	privateRoutes.Get("/cart", h.GetCart)
+	privateRoutes.Delete("/cart/:item_id", h.RemoveFromCart)
+	privateRoutes.Post("/order", h.PlaceOrder)
+	privateRoutes.Get("/order", h.GetOrders)
+	privateRoutes.Get("/order/:id", h.GetOrder)
+	privateRoutes.Post("/become-seller", h.BecomeSeller)
 }
