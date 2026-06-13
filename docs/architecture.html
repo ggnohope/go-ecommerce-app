@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Service — Kiến trúc &amp; Flow hoạt động</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #1c2230;
+    --border: #2d333b;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --pink: #ff7b72;
+    --mono: "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  /* ───── layout ───── */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 230px;
+    background: var(--panel); border-right: 1px solid var(--border);
+    padding: 24px 0; overflow-y: auto; z-index: 10;
+  }
+  .sidebar h1 { font-size: 15px; padding: 0 20px 14px; color: #fff; border-bottom: 1px solid var(--border); }
+  .sidebar h1 small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; margin-top: 2px; }
+  .sidebar a {
+    display: block; padding: 9px 20px; color: var(--muted);
+    text-decoration: none; font-size: 13.5px; border-left: 3px solid transparent;
+  }
+  .sidebar a:hover { color: var(--text); background: var(--panel2); }
+  .sidebar a.active { color: var(--accent); border-left-color: var(--accent); background: var(--panel2); }
+  main { margin-left: 230px; padding: 36px 44px 120px; max-width: 1200px; }
+  section { margin-bottom: 80px; scroll-margin-top: 24px; }
+  h2 { font-size: 24px; color: #fff; margin-bottom: 6px; }
+  h3 { font-size: 17px; color: #fff; margin: 28px 0 10px; }
+  .sub { color: var(--muted); margin-bottom: 22px; font-size: 14px; }
+  p { margin-bottom: 10px; font-size: 14.5px; }
+  .file-ref { font-family: var(--mono); font-size: 12px; color: var(--purple); }
+  code.inline { font-family: var(--mono); font-size: 13px; background: var(--panel2); padding: 1px 6px; border-radius: 4px; color: var(--pink); }
+
+  /* ───── architecture diagram ───── */
+  .arch { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 18px; margin: 20px 0; }
+  .arch-col { display: flex; flex-direction: column; gap: 14px; justify-content: center; }
+  .node {
+    background: var(--panel); border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; cursor: pointer; transition: all .15s; position: relative;
+  }
+  .node:hover, .node.sel { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .node .icon { font-size: 22px; margin-bottom: 4px; }
+  .node b { display: block; color: #fff; font-size: 14px; }
+  .node span { font-size: 12px; color: var(--muted); }
+  .node .badge {
+    position: absolute; top: 10px; right: 12px; font-size: 10px; padding: 2px 7px;
+    border-radius: 10px; font-weight: 600;
+  }
+  .badge.opt { background: rgba(210,153,34,.15); color: var(--orange); }
+  .badge.req { background: rgba(63,185,80,.15); color: var(--green); }
+  .badge.ext { background: rgba(188,140,255,.15); color: var(--purple); }
+  #arch-detail {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin-top: 18px; min-height: 120px;
+  }
+  #arch-detail h4 { color: var(--accent); font-size: 15px; margin-bottom: 8px; }
+  #arch-detail ul { margin: 8px 0 0 18px; font-size: 13.5px; }
+  #arch-detail li { margin-bottom: 4px; }
+
+  /* ───── sequence player ───── */
+  .player { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-top: 16px; }
+  .seq-body { display: flex; min-height: 320px; }
+  .seq-left { flex: 1.15; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+  .lanes { display: flex; border-bottom: 1px solid var(--border); background: var(--panel2); }
+  .lane-h { flex: 1; text-align: center; padding: 10px 4px; font-size: 12.5px; font-weight: 600; color: #fff; }
+  .lane-h .ic { display: block; font-size: 17px; }
+  .seq-steps { flex: 1; padding: 12px 0; position: relative; }
+  .lifeline { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--border); pointer-events: none; }
+  .phase-label {
+    margin: 10px 14px 4px; font-size: 11px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; padding: 3px 10px; border-radius: 5px; display: inline-block;
+  }
+  .step-row { position: relative; height: 44px; cursor: pointer; opacity: .32; transition: opacity .2s; }
+  .step-row:hover { opacity: .75; }
+  .step-row.active { opacity: 1; }
+  .step-row.done { opacity: .85; }
+  .arrow { position: absolute; top: 22px; height: 2px; }
+  .arrow .line { width: 100%; height: 2px; border-radius: 2px; }
+  .arrow.solid .line { background: var(--accent); }
+  .arrow.ret .line { background: var(--green); background-image: linear-gradient(90deg, var(--green) 60%, transparent 40%); background-size: 9px 2px; }
+  .arrow.err .line { background: var(--red); }
+  .arrow .head { position: absolute; top: -4px; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+  .arrow.r .head { right: -1px; border-left: 8px solid var(--accent); }
+  .arrow.l .head { left: -1px; border-right: 8px solid var(--accent); }
+  .arrow.ret.r .head { border-left-color: var(--green); }
+  .arrow.ret.l .head { border-right-color: var(--green); }
+  .arrow.err.r .head { border-left-color: var(--red); }
+  .arrow.err.l .head { border-right-color: var(--red); }
+  .arrow.self { border: 2px solid var(--orange); border-left: none; border-radius: 0 8px 8px 0; width: 26px !important; height: 16px; background: none; }
+  .arrow.self .line { display: none; }
+  .arrow.self .head { left: -4px; top: 10px; border-right: 8px solid var(--orange); }
+  .step-label {
+    position: absolute; top: 0; font-size: 11.5px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+    text-align: center; font-family: var(--mono);
+  }
+  .step-row.active .step-label { color: #fff; font-weight: 600; }
+  .step-num {
+    position: absolute; left: 6px; top: 13px; width: 19px; height: 19px; border-radius: 50%;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--muted);
+    font-size: 10px; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  }
+  .step-row.active .step-num { background: var(--accent); color: #04121f; border-color: var(--accent); }
+  .seq-detail { flex: 1; padding: 16px 18px; display: flex; flex-direction: column; min-width: 0; }
+  .seq-detail h4 { color: #fff; font-size: 14.5px; margin-bottom: 6px; }
+  .seq-detail .desc { font-size: 13px; color: var(--text); margin-bottom: 10px; }
+  .seq-detail .floc { font-family: var(--mono); font-size: 11px; color: var(--purple); margin-bottom: 6px; }
+  pre.code {
+    background: #0a0e14; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; font-family: var(--mono); font-size: 11.8px; line-height: 1.55;
+    overflow-x: auto; flex: 1; color: #d4dae3; white-space: pre; tab-size: 4;
+  }
+  pre.code .k { color: #ff7b72; } pre.code .s { color: #a5d6ff; } pre.code .c { color: #8b949e; font-style: italic; }
+  pre.code .f { color: #d2a8ff; } pre.code .n { color: #79c0ff; }
+  .controls { display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--panel2); }
+  .controls button {
+    background: var(--accent); color: #04121f; border: none; border-radius: 7px;
+    padding: 7px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .controls button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .controls button:disabled { opacity: .35; cursor: default; }
+  .controls .pos { margin-left: auto; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+  /* ───── SQS lifecycle ───── */
+  .sqs-pipe { display: flex; align-items: stretch; gap: 0; margin: 18px 0; flex-wrap: wrap; }
+  .sqs-stage { flex: 1; min-width: 150px; text-align: center; padding: 14px 10px; background: var(--panel); border: 1.5px solid var(--border); border-radius: 10px; margin: 0 6px 10px; cursor: pointer; transition: border-color .15s; }
+  .sqs-stage:hover, .sqs-stage.sel { border-color: var(--orange); }
+  .sqs-stage .ic { font-size: 22px; }
+  .sqs-stage b { display: block; font-size: 12.5px; color: #fff; margin-top: 4px; }
+  .sqs-stage span { font-size: 11px; color: var(--muted); }
+
+  /* ───── state machine ───── */
+  .sm-wrap { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 16px; }
+  .sm-svg-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; flex: 1; min-width: 420px; }
+  .sm-svg-box h4 { color: #fff; font-size: 14px; margin-bottom: 10px; font-family: var(--mono); }
+  svg .st { fill: var(--panel2); stroke: var(--border); stroke-width: 1.5; rx: 8; cursor: pointer; }
+  svg .st.impl { stroke: var(--green); }
+  svg .st.sel-st { stroke: var(--accent); stroke-width: 2.5; }
+  svg text { fill: var(--text); font-family: var(--mono); font-size: 12px; pointer-events: none; }
+  svg .edge { stroke: var(--muted); stroke-width: 1.5; fill: none; marker-end: url(#arr); cursor: pointer; }
+  svg .edge.impl { stroke: var(--green); marker-end: url(#arrg); }
+  svg .edge.sel-e { stroke: var(--accent); stroke-width: 2.5; marker-end: url(#arrb); }
+  svg .elabel { font-size: 10px; fill: var(--muted); }
+  svg .elabel.impl { fill: var(--green); }
+  #sm-detail { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-top: 16px; }
+
+  /* ───── ERD ───── */
+  .erd-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0 16px; font-size: 12.5px; align-items: center; }
+  .erd-legend .lg { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .erd-legend .swatch { width: 26px; height: 3px; border-radius: 2px; display: inline-block; }
+  .erd-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 4px; }
+  .erd-canvas { position: relative; width: 1100px; height: 690px; }
+  .erd-canvas svg { position: absolute; top: 0; left: 0; width: 1100px; height: 690px; pointer-events: none; }
+  .erd-edge { fill: none; stroke-width: 1.6; opacity: .55; transition: opacity .15s, stroke-width .15s; }
+  .erd-edge.cascade { stroke: var(--red); }
+  .erd-edge.restrict { stroke: var(--orange); }
+  .erd-edge.setnull { stroke: var(--accent); }
+  .erd-edge.hot { opacity: 1; stroke-width: 3; }
+  .erd-edge.dim { opacity: .12; }
+  .erd-dot { transition: opacity .15s; }
+  .erd-dot.cascade { fill: var(--red); }
+  .erd-dot.restrict { fill: var(--orange); }
+  .erd-dot.setnull { fill: var(--accent); }
+  .erd-dot.dim { opacity: .12; }
+  .erd-rule { font-family: var(--mono); font-size: 9px; fill: var(--muted); opacity: 0; transition: opacity .15s; }
+  .erd-rule.show { opacity: 1; }
+  .ent {
+    position: absolute; width: 188px; background: var(--panel2); border: 1.5px solid var(--border);
+    border-radius: 9px; overflow: hidden; cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; z-index: 2;
+  }
+  .ent:hover { border-color: var(--accent); }
+  .ent.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(88,166,255,.3); transform: translateY(-2px); z-index: 3; }
+  .ent.dim { opacity: .28; }
+  .ent.rel { border-color: var(--purple); }
+  .ent .eh { background: #11161f; padding: 7px 11px; font-family: var(--mono); font-size: 13px; font-weight: 700; color: #fff; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+  .ent .eh .ec { font-size: 13px; }
+  .ent .row { padding: 4px 11px; font-family: var(--mono); font-size: 11.5px; color: var(--text); display: flex; align-items: center; gap: 6px; border-bottom: 1px solid rgba(45,51,59,.5); }
+  .ent .row:last-child { border-bottom: none; }
+  .ent .row .key { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; letter-spacing: .03em; }
+  .ent .row .key.pk { background: rgba(210,153,34,.18); color: var(--orange); }
+  .ent .row .key.fk { background: rgba(63,185,80,.18); color: var(--green); }
+  .ent .row.fkrow { color: var(--green); }
+  .ent .row .muted { color: var(--muted); margin-left: auto; font-size: 10px; }
+  #erd-detail { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-top: 18px; }
+  #erd-detail h4 { color: var(--accent); font-size: 15px; margin-bottom: 8px; }
+  #erd-detail .rel-line { font-family: var(--mono); font-size: 12.5px; margin: 5px 0; padding: 5px 10px; border-radius: 6px; background: var(--panel2); }
+  #erd-detail .rel-line .arrow { color: var(--muted); }
+  #erd-detail .pill { font-size: 9.5px; font-weight: 700; padding: 1px 7px; border-radius: 9px; margin-left: 6px; }
+  #erd-detail .pill.cascade { background: rgba(248,81,73,.16); color: var(--red); }
+  #erd-detail .pill.restrict { background: rgba(210,153,34,.16); color: var(--orange); }
+  #erd-detail .pill.setnull { background: rgba(88,166,255,.16); color: var(--accent); }
+
+  /* ───── config ───── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0 20px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+  td code { font-family: var(--mono); font-size: 12px; color: var(--pink); }
+  .tag { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 700; }
+  .tag.req { background: rgba(248,81,73,.15); color: var(--red); }
+  .tag.opt { background: rgba(210,153,34,.15); color: var(--orange); }
+  .warn-box { background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.4); border-radius: 8px; padding: 12px 16px; margin: 14px 0; font-size: 13.5px; }
+  .warn-box b { color: var(--orange); }
+  .bug-box { background: rgba(248,81,73,.07); border: 1px solid rgba(248,81,73,.4); border-radius: 8px; padding: 12px 16px; margin: 14px 0; font-size: 13.5px; }
+  .bug-box b { color: var(--red); }
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <h1>🛒 go-ecommerce-app<small>Order Service — Architecture &amp; Flows</small></h1>
+  <a href="#arch" class="active">1 · Kiến trúc tổng quan</a>
+  <a href="#erd">2 · Sơ đồ quan hệ DB (ERD)</a>
+  <a href="#flow-order">3 · Flow đặt hàng</a>
+  <a href="#flow-stripe">4 · Flow thanh toán Stripe</a>
+  <a href="#sqs">5 · AWS SQS lifecycle</a>
+  <a href="#states">6 · State machine</a>
+  <a href="#config">7 · Cấu hình &amp; setup</a>
+</nav>
+
+<main>
+
+<!-- ════════════════ 1. ARCHITECTURE ════════════════ -->
+<section id="arch">
+  <h2>1 · Kiến trúc tổng quan</h2>
+  <p class="sub">Click vào từng thành phần để xem vai trò, file code và cách nó được khởi tạo.</p>
+
+  <div class="arch">
+    <div class="arch-col">
+      <div class="node" data-c="browser"><div class="icon">🌐</div><b>Frontend / Browser</b><span>React + Stripe.js</span><span class="badge ext">CLIENT</span></div>
+      <div class="node" data-c="stripe"><div class="icon">💳</div><b>Stripe</b><span>Cổng thanh toán</span><span class="badge opt">OPTIONAL</span></div>
+    </div>
+    <div class="arch-col">
+      <div class="node" data-c="api"><div class="icon">⚡</div><b>Go Fiber API :9000</b><span>handlers → services → repositories</span><span class="badge req">CORE</span></div>
+      <div class="node" data-c="sqs"><div class="icon">📨</div><b>AWS SQS</b><span>Hàng đợi order events</span><span class="badge opt">OPTIONAL</span></div>
+    </div>
+    <div class="arch-col">
+      <div class="node" data-c="db"><div class="icon">🗄️</div><b>PostgreSQL</b><span>GORM — orders, carts, users…</span><span class="badge req">CORE</span></div>
+      <div class="node" data-c="consumer"><div class="icon">⚙️</div><b>Consumers</b><span>Email / Analytics / Shipping</span><span class="badge ext">EXTERNAL</span></div>
+    </div>
+  </div>
+
+  <div id="arch-detail"><h4>👆 Chọn một thành phần</h4><p>Ví dụ: click vào <b>Go Fiber API</b> để xem cấu trúc layer bên trong.</p></div>
+</section>
+
+<!-- ════════════════ 2. ERD ════════════════ -->
+<section id="erd">
+  <h2>2 · Sơ đồ quan hệ dữ liệu (ERD)</h2>
+  <p class="sub">10 bảng + 12 quan hệ khoá ngoại, dựng từ GORM model trong <span class="file-ref">internal/domain/</span>. Hàng <b style="color:var(--orange)">PK</b> = khoá chính, hàng <b style="color:var(--green)">FK</b> = khoá ngoại. <b>Click vào một bảng</b> để tô sáng các quan hệ liên quan và xem rule <code class="inline">OnDelete</code>.</p>
+
+  <div class="erd-legend">
+    <span class="lg"><span class="swatch" style="background:var(--red)"></span> OnDelete: CASCADE — xoá cha → xoá con</span>
+    <span class="lg"><span class="swatch" style="background:var(--orange)"></span> OnDelete: RESTRICT — chặn xoá khi còn con</span>
+    <span class="lg"><span class="swatch" style="background:var(--accent)"></span> OnDelete: SET NULL — con thành mồ côi (NULL)</span>
+  </div>
+
+  <div class="erd-scroll">
+    <div class="erd-canvas" id="erd-canvas">
+      <svg id="erd-svg" viewBox="0 0 1100 690"></svg>
+    </div>
+  </div>
+
+  <div id="erd-detail">
+    <h4>👆 Click vào một bảng phía trên</h4>
+    <p style="font-size:13.5px">Ví dụ: click <b>users</b> để thấy 5 bảng trỏ về nó (products.seller_id, carts, orders, addresses, refresh_tokens) — đây chính là các FK bị thiếu trong DB cũ của bạn, khiến bảng <code class="inline">users</code> đứng tách biệt không có đường nối.</p>
+  </div>
+</section>
+
+<!-- ════════════════ 3. PLACE ORDER FLOW ════════════════ -->
+<section id="flow-order">
+  <h2>3 · Flow đặt hàng — <code class="inline">POST /user/me/order</code></h2>
+  <p class="sub">Bấm <b>Next ▸</b> (hoặc phím mũi tên) để đi từng bước. Panel bên phải hiển thị code thật đang chạy ở bước đó.</p>
+  <div class="player" id="player-order"></div>
+</section>
+
+<!-- ════════════════ 3. STRIPE FLOW ════════════════ -->
+<section id="flow-stripe">
+  <h2>4 · Flow thanh toán Stripe</h2>
+  <p class="sub">3 giai đoạn: <b style="color:var(--accent)">tạo PaymentIntent</b> (server) → <b style="color:var(--green)">nhập thẻ</b> (client ↔ Stripe, không qua server của bạn) → <b style="color:var(--orange)">webhook</b> (nguồn sự thật duy nhất).</p>
+  <div class="player" id="player-stripe"></div>
+  <div class="bug-box"><b>⚠ Bug tiềm ẩn:</b> trong <span class="file-ref">orderService.go:155</span>, webhook handler gọi <code class="inline">s.sqsClient.PublishOrderEvent(...)</code> <u>không check nil</u> (PlaceOrder thì có check). Nếu bật Stripe mà không cấu hình SQS → webhook đầu tiên sẽ <b>panic</b>.</div>
+</section>
+
+<!-- ════════════════ 4. SQS ════════════════ -->
+<section id="sqs">
+  <h2>5 · AWS SQS — vòng đời một message</h2>
+  <p class="sub">SQS decouple API khỏi các tác vụ phụ trợ: API chỉ mất ~10ms để ném event rồi trả response; email/analytics/shipping xử lý sau, chậm hay chết cũng không ảnh hưởng việc đặt hàng. Click từng giai đoạn:</p>
+
+  <div class="sqs-pipe">
+    <div class="sqs-stage" data-s="0"><div class="ic">📤</div><b>1. SendMessage</b><span>Producer publish</span></div>
+    <div class="sqs-stage" data-s="1"><div class="ic">📨</div><b>2. Trong queue</b><span>chờ consumer</span></div>
+    <div class="sqs-stage" data-s="2"><div class="ic">📥</div><b>3. ReceiveMessage</b><span>long polling</span></div>
+    <div class="sqs-stage" data-s="3"><div class="ic">🫥</div><b>4. Visibility timeout</b><span>message bị ẩn ~30s</span></div>
+    <div class="sqs-stage" data-s="4"><div class="ic">✅</div><b>5a. DeleteMessage</b><span>xử lý OK → xoá</span></div>
+    <div class="sqs-stage" data-s="5"><div class="ic">💀</div><b>5b. Retry → DLQ</b><span>lỗi nhiều lần</span></div>
+  </div>
+
+  <div class="player" style="border-radius:10px">
+    <div class="seq-body" style="min-height:auto">
+      <div class="seq-detail" id="sqs-detail" style="flex:1">
+        <h4>👆 Chọn một giai đoạn phía trên</h4>
+        <p class="desc">Mặc định: xem code producer của app này.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>2 tính chất bắt buộc phải nhớ khi viết consumer</h3>
+  <p>① <b>At-least-once delivery</b> — message có thể được giao ≥ 1 lần → consumer phải <b>idempotent</b> (xử lý 2 lần cùng <code class="inline">order_id</code> không được gửi 2 email).<br>
+  ② <b>Standard queue không đảm bảo thứ tự</b> — <code class="inline">ORDER_PAID</code> có thể đến trước <code class="inline">ORDER_PLACED</code>.</p>
+</section>
+
+<!-- ════════════════ 5. STATE MACHINE ════════════════ -->
+<section id="states">
+  <h2>6 · State machine của Order</h2>
+  <p class="sub">Mỗi order có <b>2 trạng thái song song</b>: <code class="inline">Status</code> (vòng đời đơn) và <code class="inline">PaymentStatus</code> (vòng đời thanh toán) — định nghĩa tại <span class="file-ref">internal/domain/Order.go</span>. Cạnh <b style="color:var(--green)">xanh</b> = đã hiện thực trong code, cạnh xám = đã khai báo hằng số nhưng chưa có endpoint nào chuyển tới. Click vào cạnh xanh để xem code kích hoạt.</p>
+
+  <div class="sm-wrap">
+    <div class="sm-svg-box">
+      <h4>Order.Status</h4>
+      <svg viewBox="0 0 480 230" width="100%">
+        <defs>
+          <marker id="arr"  markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b949e"/></marker>
+          <marker id="arrg" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3fb950"/></marker>
+          <marker id="arrb" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#58a6ff"/></marker>
+        </defs>
+        <rect class="st impl" x="10"  y="40" width="92" height="34" rx="8" data-e="none"/><text x="56"  y="62" text-anchor="middle">pending</text>
+        <rect class="st impl" x="160" y="40" width="100" height="34" rx="8"/><text x="210" y="62" text-anchor="middle">confirmed</text>
+        <rect class="st" x="320" y="40" width="88" height="34" rx="8"/><text x="364" y="62" text-anchor="middle">shipped</text>
+        <rect class="st" x="320" y="130" width="96" height="34" rx="8"/><text x="368" y="152" text-anchor="middle">delivered</text>
+        <rect class="st" x="10"  y="130" width="96" height="34" rx="8"/><text x="58" y="152" text-anchor="middle">cancelled</text>
+        <path class="edge impl" d="M102,57 L158,57" data-e="confirm"/>
+        <text class="elabel impl" x="106" y="50">webhook ✓</text>
+        <path class="edge" d="M260,57 L318,57"/>
+        <path class="edge" d="M364,74 L366,128"/>
+        <path class="edge" d="M56,74 L57,128"/>
+        <text class="elabel" x="62" y="105">(chưa có endpoint)</text>
+      </svg>
+    </div>
+    <div class="sm-svg-box">
+      <h4>Order.PaymentStatus</h4>
+      <svg viewBox="0 0 480 230" width="100%">
+        <rect class="st impl" x="10" y="40" width="92" height="34" rx="8"/><text x="56" y="62" text-anchor="middle">pending</text>
+        <rect class="st impl" x="200" y="14" width="72" height="34" rx="8"/><text x="236" y="36" text-anchor="middle">paid</text>
+        <rect class="st impl" x="200" y="90" width="78" height="34" rx="8"/><text x="239" y="112" text-anchor="middle">failed</text>
+        <rect class="st" x="360" y="14" width="100" height="34" rx="8"/><text x="410" y="36" text-anchor="middle">refunded</text>
+        <path class="edge impl" d="M102,52 C140,45 160,38 198,32" data-e="paid"/>
+        <text class="elabel impl" x="112" y="32">succeeded</text>
+        <path class="edge impl" d="M102,64 C140,72 160,80 198,98" data-e="failed"/>
+        <text class="elabel impl" x="118" y="95">payment_failed</text>
+        <path class="edge" d="M272,31 L358,31"/>
+        <text class="elabel" x="284" y="24">(chưa hiện thực)</text>
+        <path class="edge impl" d="M239,90 C220,76 150,68 104,60" data-e="retry"/>
+        <text class="elabel impl" x="150" y="60">user trả lại</text>
+      </svg>
+    </div>
+  </div>
+
+  <div id="sm-detail"><h4 style="color:var(--accent);font-size:15px">👆 Click vào một cạnh màu xanh</h4><p style="font-size:13.5px">Ví dụ: cạnh <b>pending → confirmed</b> để xem code webhook xử lý.</p></div>
+</section>
+
+<!-- ════════════════ 6. CONFIG ════════════════ -->
+<section id="config">
+  <h2>7 · Cấu hình &amp; setup</h2>
+  <p class="sub">Toàn bộ env var đọc tại <span class="file-ref">configs/appConfig.go</span>. Khi <code class="inline">APP_ENV=development</code>, app tự load file <code class="inline">.env</code> (godotenv).</p>
+
+  <table>
+    <tr><th>Biến môi trường</th><th>Bắt buộc?</th><th>Vai trò</th><th>Nếu thiếu</th></tr>
+    <tr><td><code>HTTP_PORT</code></td><td><span class="tag req">REQUIRED</span></td><td>Cổng server (vd <code>localhost:9000</code>)</td><td>App không khởi động</td></tr>
+    <tr><td><code>DATA_SOURCE_NAME</code></td><td><span class="tag req">REQUIRED</span></td><td>DSN PostgreSQL</td><td>App không khởi động</td></tr>
+    <tr><td><code>APP_SECRET</code></td><td><span class="tag req">REQUIRED</span></td><td>Secret ký JWT (HS256)</td><td>App không khởi động</td></tr>
+    <tr><td><code>AWS_REGION</code></td><td><span class="tag req">REQUIRED</span></td><td>Region cho SES/SNS/S3/SQS</td><td>App không khởi động</td></tr>
+    <tr><td><code>AWS_SES_FROM_EMAIL</code></td><td><span class="tag req">REQUIRED</span></td><td>Email gửi thông báo (SES)</td><td>App không khởi động</td></tr>
+    <tr><td><code>AWS_S3_BUCKET</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Bucket ảnh sản phẩm</td><td>⚠ image uploads disabled</td></tr>
+    <tr><td><code>AWS_SQS_ORDER_QUEUE_URL</code></td><td><span class="tag opt">OPTIONAL</span></td><td>URL queue order events</td><td>⚠ order events disabled</td></tr>
+    <tr><td><code>STRIPE_SECRET_KEY</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Secret key Stripe (<code>sk_test_…</code>)</td><td>⚠ payment intents disabled</td></tr>
+    <tr><td><code>STRIPE_WEBHOOK_SECRET</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Secret verify chữ ký webhook (<code>whsec_…</code>)</td><td>Webhook validation fail</td></tr>
+  </table>
+
+  <h3>File .env mẫu (development)</h3>
+  <pre class="code">APP_ENV=development
+HTTP_PORT=localhost:9000
+DATA_SOURCE_NAME=host=localhost user=postgres password=postgres dbname=ecommerce port=5432 sslmode=disable
+APP_SECRET=super-secret-jwt-key
+
+AWS_REGION=ap-southeast-1
+AWS_SES_FROM_EMAIL=no-reply@yourshop.com
+AWS_S3_BUCKET=my-ecommerce-product-images
+AWS_SQS_ORDER_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/123456789012/order-events
+
+STRIPE_SECRET_KEY=sk_test_xxxxxxxxxxxxx
+STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxx</pre>
+
+  <h3>Setup SQS queue (kèm Dead Letter Queue)</h3>
+  <pre class="code"><span class="c"># 1. Tạo DLQ trước</span>
+aws sqs create-queue --queue-name order-events-dlq
+
+<span class="c"># 2. Lấy ARN của DLQ</span>
+aws sqs get-queue-attributes \
+  --queue-url https://sqs.ap-southeast-1.amazonaws.com/123456789012/order-events-dlq \
+  --attribute-names QueueArn
+
+<span class="c"># 3. Tạo queue chính, lỗi 5 lần thì đẩy sang DLQ</span>
+aws sqs create-queue --queue-name order-events --attributes '{
+  "VisibilityTimeout": "30",
+  "RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:ap-southeast-1:123456789012:order-events-dlq\",\"maxReceiveCount\":\"5\"}"
+}'
+
+<span class="c"># Xem message trong queue (debug)</span>
+aws sqs receive-message --queue-url $QUEUE_URL --max-number-of-messages 10</pre>
+
+  <h3>Test Stripe webhook ở localhost (Stripe CLI)</h3>
+  <pre class="code"><span class="c"># 1. Đăng nhập + forward webhook về local — lệnh này in ra whsec_… </span>
+<span class="c">#    → copy vào STRIPE_WEBHOOK_SECRET rồi restart server</span>
+stripe login
+stripe listen --forward-to localhost:9000/orders/payment/webhook
+
+<span class="c"># 2. Ở terminal khác: giả lập thanh toán thành công</span>
+stripe trigger payment_intent.succeeded
+
+<span class="c"># 3. Test thẻ thật trong UI: dùng số thẻ test của Stripe</span>
+<span class="c">#    4242 4242 4242 4242  — luôn thành công</span>
+<span class="c">#    4000 0000 0000 0002  — luôn bị từ chối (decline)</span></pre>
+
+  <div class="warn-box"><b>Lưu ý thứ tự bật service:</b> nếu bật <code class="inline">STRIPE_SECRET_KEY</code> thì <u>nên bật luôn</u> <code class="inline">AWS_SQS_ORDER_QUEUE_URL</code> (hoặc fix nil-check ở <span class="file-ref">orderService.go:155</span>) để tránh panic khi webhook <code class="inline">payment_intent.succeeded</code> bắn về.</div>
+
+  <h3>Các điểm cải thiện đáng làm tiếp</h3>
+  <p>① Bọc <b>transaction</b> quanh CreateOrder + ClearCart (hiện là 2 thao tác rời — app chết giữa chừng thì cart còn nguyên dù đơn đã tạo).<br>
+  ② <b>Trừ tồn kho</b> khi đặt hàng — PlaceOrder hiện không kiểm tra/giảm <code class="inline">stock</code>.<br>
+  ③ Lưu tiền dạng <b>cents (int64)</b> thay vì <code class="inline">float64</code> — khớp với cách Stripe tính.<br>
+  ④ Chống <b>replay webhook</b>: check <code class="inline">payment_status == paid</code> trước khi publish lại <code class="inline">ORDER_PAID</code> lên SQS.</p>
+</section>
+
+</main>
+
+<script>
+/* ═══════════ helpers ═══════════ */
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function hl(src){ // very light Go/JS/JSON highlighter
+  let s = esc(src);
+  s = s.replace(/(\/\/[^\n]*)/g,'<span class="c">$1</span>');
+  s = s.replace(/("(?:[^"\\]|\\.)*")/g,'<span class="s">$1</span>');
+  s = s.replace(/\b(func|return|if|err|nil|var|switch|case|range|for|const|type|struct|map|defer|go|await|async|else|interface)\b/g,'<span class="k">$1</span>');
+  s = s.replace(/\b(\d+(?:\.\d+)?)\b/g,'<span class="n">$1</span>');
+  return s;
+}
+
+/* ═══════════ 1. architecture detail panel ═══════════ */
+const ARCH = {
+  browser: {t:'🌐 Frontend / Browser', d:'Client gọi REST API kèm JWT Bearer token. Riêng bước nhập thẻ, trình duyệt nói chuyện TRỰC TIẾP với Stripe qua Stripe.js — số thẻ không bao giờ chạm server của bạn (giảm gánh nặng PCI-DSS).', li:['Đăng nhập → nhận access token (15 phút) + refresh token (7 ngày)','Gọi POST /user/me/order để đặt hàng','Gọi stripe.confirmCardPayment(client_secret) để trả tiền']},
+  api: {t:'⚡ Go Fiber API (:9000)', d:'Core của hệ thống, kiến trúc 3 layer:', li:['<b>Handlers</b> — parse request, check auth → <span class="file-ref">internal/api/rest/handlers/</span>','<b>Services</b> — business logic → <span class="file-ref">internal/service/orderService.go</span>','<b>Repositories</b> — truy cập DB qua GORM → <span class="file-ref">internal/repository/</span>','Stripe &amp; SQS client được inject vào orderService lúc khởi động (<span class="file-ref">configs/appConfig.go</span>); nếu thiếu env var thì = nil và tính năng tương ứng tắt']},
+  db: {t:'🗄️ PostgreSQL (GORM)', d:'Lưu toàn bộ trạng thái: users, products, carts, orders, order_items, refresh_tokens. Bảng orders có 2 cột trạng thái song song:', li:['<code>status</code>: pending → confirmed → shipped → delivered / cancelled','<code>payment_status</code>: pending → paid / failed → refunded','<code>payment_intent_id</code>: nối đơn hàng với PaymentIntent bên Stripe']},
+  stripe: {t:'💳 Stripe', d:'Cổng thanh toán. Mô hình PaymentIntent: server tạo intent với số tiền lấy từ DB (chống sửa giá), client xác nhận thẻ, Stripe bắn webhook về làm nguồn sự thật.', li:['<span class="file-ref">pkg/payment/stripe.go</span> — CreatePaymentIntent, ValidateWebhook, ExtractOrderID','metadata.order_id là "sợi chỉ" nối Stripe quay về đơn hàng','Webhook được verify chữ ký HMAC-SHA256 → không cần JWT']},
+  sqs: {t:'📨 AWS SQS', d:'Hàng đợi sự kiện ORDER_PLACED / ORDER_PAID / ORDER_SHIPPED. Producer là app này; consumer là các service khác (chưa nằm trong repo).', li:['<span class="file-ref">pkg/queue/sqs.go</span> — PublishOrderEvent','Message = JSON body + MessageAttribute event_type (lọc không cần parse body)','Publish lỗi chỉ log warning — KHÔNG làm fail request đặt hàng']},
+  consumer: {t:'⚙️ Consumers (ngoài repo)', d:'Bất kỳ service nào poll queue: gửi email xác nhận, ghi analytics, tạo đơn vận chuyển… Phải tuân thủ 2 luật của SQS:', li:['Idempotent — message có thể được giao nhiều lần','Không dựa vào thứ tự — standard queue không FIFO']},
+};
+document.querySelectorAll('.node').forEach(n=>{
+  n.onclick=()=>{
+    document.querySelectorAll('.node').forEach(x=>x.classList.remove('sel'));
+    n.classList.add('sel');
+    const a=ARCH[n.dataset.c];
+    document.getElementById('arch-detail').innerHTML =
+      `<h4>${a.t}</h4><p style="font-size:13.5px">${a.d}</p><ul>${a.li.map(x=>`<li>${x}</li>`).join('')}</ul>`;
+  };
+});
+
+/* ═══════════ sequence player engine ═══════════ */
+function buildPlayer(rootId, actors, steps){
+  const root=document.getElementById(rootId);
+  let cur=0;
+  const lanes=`<div class="lanes">${actors.map(a=>`<div class="lane-h"><span class="ic">${a.ic}</span>${a.name}</div>`).join('')}</div>`;
+  const N=actors.length;
+  const lifelines=actors.map((_,i)=>`<div class="lifeline" style="left:${(i+0.5)/N*100}%"></div>`).join('');
+  let rows='';
+  steps.forEach((s,i)=>{
+    if(s.phase) rows+=`<div class="phase-label" style="background:${s.phaseBg};color:${s.phaseColor}">${s.phase}</div>`;
+    const a=Math.min(s.from,s.to), b=Math.max(s.from,s.to);
+    let arrow;
+    if(s.from===s.to){
+      const left=((s.from+0.5)/N*100);
+      arrow=`<div class="arrow self" style="left:${left}%"><div class="head"></div></div>
+             <div class="step-label" style="left:${left+3}%;max-width:${(100/N)*1.6}%">${s.label}</div>`;
+    } else {
+      const left=((a+0.5)/N*100), width=((b-a)/N*100);
+      const dir=s.to>s.from?'r':'l';
+      const cls=s.kind||'solid';
+      arrow=`<div class="arrow ${cls} ${dir}" style="left:${left}%;width:${width}%"><div class="line"></div><div class="head"></div></div>
+             <div class="step-label" style="left:${left}%;width:${width}%">${s.label}</div>`;
+    }
+    rows+=`<div class="step-row" data-i="${i}"><div class="step-num">${i+1}</div>${arrow}</div>`;
+  });
+  root.innerHTML=`<div class="seq-body"><div class="seq-left">${lanes}<div class="seq-steps">${lifelines}${rows}</div></div><div class="seq-detail" id="${rootId}-d"></div></div>
+    <div class="controls">
+      <button class="ghost" data-act="prev">◂ Prev</button>
+      <button data-act="next">Next ▸</button>
+      <button class="ghost" data-act="reset">↺ Reset</button>
+      <span class="pos"></span>
+    </div>`;
+  const rowEls=[...root.querySelectorAll('.step-row')];
+  const detail=document.getElementById(rootId+'-d');
+  const pos=root.querySelector('.pos');
+  function render(){
+    rowEls.forEach((r,i)=>{r.classList.toggle('active',i===cur);r.classList.toggle('done',i<cur);});
+    const s=steps[cur];
+    detail.innerHTML=`<h4>Bước ${cur+1}: ${s.title}</h4><div class="desc">${s.desc}</div>
+      ${s.file?`<div class="floc">📄 ${s.file}</div>`:''}<pre class="code">${hl(s.code)}</pre>`;
+    pos.textContent=`${cur+1} / ${steps.length}`;
+    root.querySelector('[data-act=prev]').disabled=cur===0;
+    root.querySelector('[data-act=next]').disabled=cur===steps.length-1;
+  }
+  root.querySelector('.controls').onclick=e=>{
+    const act=e.target.dataset.act;
+    if(act==='next'&&cur<steps.length-1)cur++;
+    if(act==='prev'&&cur>0)cur--;
+    if(act==='reset')cur=0;
+    if(act)render();
+  };
+  rowEls.forEach(r=>r.onclick=()=>{cur=+r.dataset.i;render();});
+  root.tabIndex=0;
+  root.onkeydown=e=>{
+    if(e.key==='ArrowRight'&&cur<steps.length-1){cur++;render();e.preventDefault();}
+    if(e.key==='ArrowLeft'&&cur>0){cur--;render();e.preventDefault();}
+  };
+  render();
+}
+
+/* ═══════════ 2. place-order flow data ═══════════ */
+const A_ORDER=[{ic:'🌐',name:'Browser'},{ic:'⚡',name:'API'},{ic:'🗄️',name:'PostgreSQL'},{ic:'📨',name:'SQS'}];
+buildPlayer('player-order', A_ORDER, [
+ {from:0,to:1,label:'POST /user/me/order + JWT',title:'Client gửi yêu cầu đặt hàng',
+  desc:'Request chỉ chứa địa chỉ giao hàng — danh sách sản phẩm lấy từ cart trong DB, KHÔNG tin dữ liệu client gửi lên.',
+  file:'internal/api/rest/handlers/userHandler.go:468',
+  code:`func (h *UserHandler) PlaceOrder(ctx *fiber.Ctx) error {
+	user, ok := ctx.Locals("user").(domain.User)
+	if !ok {
+		return response.Unauthorized(ctx, "unauthorized")
+	}
+	var input dto.PlaceOrderInput
+	if err := ctx.BodyParser(&input); err != nil { ... }
+
+	order, err := h.orderSvc.PlaceOrder(user.ID, input)
+	...
+	return response.Created(ctx, order)
+}`},
+ {from:1,to:1,label:'verify JWT (middleware)',title:'Middleware Authorize xác thực token',
+  desc:'Trước khi vào handler, middleware parse Bearer token, verify chữ ký HS256 + hạn 15 phút, rồi nhét user vào ctx.Locals.',
+  file:'internal/helper/auth.go:109',
+  code:`func (a *Auth) Authorize(ctx *fiber.Ctx) error {
+	authHeader := ctx.Get("Authorization")
+	user, err := a.VerifyAccessToken(authHeader)
+	if err != nil {
+		return ctx.Status(401).JSON(fiber.Map{"error": "unauthorized"})
+	}
+	ctx.Locals("user", user)
+	return ctx.Next()
+}`},
+ {from:1,to:2,label:'GetCart(userID)',title:'Lấy cart từ DB — chặn cart rỗng',
+  desc:'Nếu cart không tồn tại hoặc không có item nào → 400 "cart is empty". Đây là guard đầu tiên của business logic.',
+  file:'internal/service/orderService.go:45',
+  code:`cart, err := s.cartRepo.GetCart(userID)
+if err != nil || len(cart.Items) == 0 {
+	return nil, errors.New("cart is empty")
+}`},
+ {from:1,to:1,label:'tính total + snapshot giá',title:'Tính tổng tiền, chụp lại giá tại thời điểm đặt',
+  desc:'Mỗi OrderItem lưu Price hiện tại của cart item — sau này seller đổi giá sản phẩm thì đơn cũ KHÔNG bị ảnh hưởng. Total làm tròn 2 chữ số thập phân.',
+  file:'internal/service/orderService.go:50',
+  code:`var total float64
+orderItems := make([]domain.OrderItem, 0, len(cart.Items))
+for _, item := range cart.Items {
+	total += item.Price * float64(item.Quantity)
+	orderItems = append(orderItems, domain.OrderItem{
+		ProductID: item.ProductID,
+		Quantity:  item.Quantity,
+		Price:     item.Price, // snapshot!
+	})
+}
+// TotalAmount: math.Round(total*100) / 100`},
+ {from:1,to:2,label:'INSERT order (pending)',title:'Tạo Order + OrderItems trong DB',
+  desc:'Đơn sinh ra với 2 trạng thái song song: Status=pending (vòng đời đơn) và PaymentStatus=pending (vòng đời thanh toán).',
+  file:'internal/service/orderService.go:61',
+  code:`order, err := s.orderRepo.CreateOrder(domain.Order{
+	UserID:          userID,
+	Status:          domain.OrderStatusPending,
+	TotalAmount:     math.Round(total*100) / 100,
+	PaymentStatus:   domain.PaymentStatusPending,
+	ShippingAddress: input.ShippingAddress,
+	Items:           orderItems,
+})`},
+ {from:1,to:2,label:'ClearCart (lỗi chỉ log)',title:'Xoá giỏ hàng — fire and forget',
+  desc:'⚠ KHÔNG nằm chung transaction với CreateOrder. Nếu xoá fail thì chỉ log warning, đơn vẫn thành công — nhưng user có thể đặt trùng. Đây là điểm nên cải thiện.',
+  file:'internal/service/orderService.go:73',
+  code:`if err = s.cartRepo.ClearCart(cart.ID); err != nil {
+	log.Printf("order: failed to clear cart after order=%d user=%d err=%v",
+		order.ID, userID, err)
+	// vẫn tiếp tục — KHÔNG return err
+}`},
+ {from:1,to:3,label:'publish ORDER_PLACED',title:'Bắn sự kiện lên SQS (nếu được cấu hình)',
+  desc:'Check nil trước khi publish (SQS là optional). Publish lỗi cũng chỉ log — nghiệp vụ chính không được phép fail vì hạ tầng phụ trợ.',
+  file:'internal/service/orderService.go:77',
+  code:`if s.sqsClient != nil {
+	ev := queue.OrderEvent{
+		EventType: queue.EventOrderPlaced, // "ORDER_PLACED"
+		OrderID:   order.ID,
+		UserID:    userID,
+		Amount:    order.TotalAmount,
+	}
+	if err = s.sqsClient.PublishOrderEvent(ev); err != nil {
+		log.Printf("order: sqs publish failed order=%d err=%v",
+			order.ID, err)
+	}
+}`},
+ {from:1,to:0,kind:'ret',label:'201 Created {order}',title:'Trả response cho client',
+  desc:'Client nhận về order đầy đủ (id, items, total_amount, status=pending). Bước tiếp theo của client: gọi tạo PaymentIntent để thanh toán → xem Flow 3.',
+  file:'internal/api/rest/handlers/userHandler.go:481',
+  code:`return response.Created(ctx, order)
+
+// Response body:
+{
+  "data": {
+    "id": 5,
+    "status": "pending",
+    "payment_status": "pending",
+    "total_amount": 1000,
+    "items": [{"product_id": 2, "quantity": 1, "price": 1000}]
+  }
+}`},
+]);
+
+/* ═══════════ 3. stripe flow data ═══════════ */
+const A_STRIPE=[{ic:'🌐',name:'Browser'},{ic:'⚡',name:'API'},{ic:'🗄️',name:'PostgreSQL'},{ic:'💳',name:'Stripe'},{ic:'📨',name:'SQS'}];
+const PH1={phase:'Giai đoạn 1 — Tạo PaymentIntent (server-side)',phaseBg:'rgba(88,166,255,.12)',phaseColor:'#58a6ff'};
+const PH2={phase:'Giai đoạn 2 — Nhập thẻ (client ↔ Stripe)',phaseBg:'rgba(63,185,80,.12)',phaseColor:'#3fb950'};
+const PH3={phase:'Giai đoạn 3 — Webhook (nguồn sự thật)',phaseBg:'rgba(210,153,34,.12)',phaseColor:'#d29922'};
+buildPlayer('player-stripe', A_STRIPE, [
+ {...PH1,from:0,to:1,label:'POST /orders/payment/intent {order_id}',title:'Client xin tạo PaymentIntent',
+  desc:'Client CHỈ gửi order_id. Số tiền do server tự tra từ DB — user không bao giờ được tự khai số tiền (chống gian lận sửa giá).',
+  file:'internal/api/rest/handlers/orderHandler.go:29',
+  code:`func (h *OrderHandler) CreatePaymentIntent(ctx *fiber.Ctx) error {
+	user, _ := ctx.Locals("user").(domain.User)
+	var input dto.CreatePaymentIntentInput
+	if err := ctx.BodyParser(&input); err != nil || input.OrderID == 0 {
+		return response.BadRequest(ctx, "order_id is required")
+	}
+	pi, err := h.svc.CreatePaymentIntent(input.OrderID, user.ID)
+	...
+	return response.OK(ctx, pi)
+}`},
+ {from:1,to:2,label:'tra order + 3 guard',title:'Kiểm tra: tồn tại / đúng chủ / chưa trả tiền',
+  desc:'3 guard liên tiếp: order tồn tại, thuộc về user đang đăng nhập (chống IDOR — trả "not found" thay vì "forbidden" để không lộ thông tin), và chưa paid.',
+  file:'internal/service/orderService.go:107',
+  code:`order, err := s.orderRepo.FindOrderByID(orderID)
+if err != nil {
+	return nil, errors.New("order not found")
+}
+if order.UserID != userID {
+	return nil, errors.New("order not found") // chống IDOR
+}
+if order.PaymentStatus == domain.PaymentStatusPaid {
+	return nil, errors.New("order is already paid")
+}`},
+ {from:1,to:3,label:'PaymentIntent.New(amount, metadata)',title:'Gọi Stripe API tạo intent',
+  desc:'Tiền đổi sang CENTS (Stripe chỉ nhận số nguyên). metadata.order_id là "sợi chỉ" — sau này webhook bắn về, server đọc lại field này để biết đơn nào được trả tiền.',
+  file:'pkg/payment/stripe.go:29',
+  code:`amountCents := int64(math.Round(order.TotalAmount * 100))
+
+params := &stripe.PaymentIntentParams{
+	Amount:   stripe.Int64(amountCents), // 1000.00 USD -> 100000
+	Currency: stripe.String("usd"),
+	Metadata: map[string]string{
+		"order_id": fmt.Sprintf("%d", orderID), // sợi chỉ nối về đơn
+	},
+}
+pi, err := paymentintent.New(params)`},
+ {from:3,to:1,kind:'ret',label:'pi_xxx + client_secret',title:'Stripe trả về intent',
+  desc:'client_secret là token một-lần cho phép RIÊNG phiên trình duyệt này hoàn tất thanh toán cho intent này. Không phải secret key của bạn — đưa cho client an toàn.',
+  code:`// Stripe response (rút gọn):
+{
+  "id": "pi_3OqK8w2eZvKYlo2C1gFJqXmZ",
+  "client_secret": "pi_3OqK8w..._secret_kY9mP2...",
+  "amount": 100000,
+  "currency": "usd",
+  "status": "requires_payment_method"
+}`},
+ {from:1,to:2,label:'UPDATE payment_intent_id',title:'Lưu liên kết intent ↔ order vào DB',
+  desc:'Để sau này tra cứu/đối soát được đơn nào gắn với intent nào ở phía Stripe Dashboard.',
+  file:'internal/service/orderService.go:129',
+  code:`if err = s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+	"payment_intent_id": pi.ID,
+}); err != nil {
+	log.Printf("order: failed to save payment_intent_id ...")
+}`},
+ {from:1,to:0,kind:'ret',label:'{client_secret}',title:'Trả client_secret cho trình duyệt',
+  desc:'Server xong nhiệm vụ giai đoạn 1. Từ đây trình duyệt nói chuyện trực tiếp với Stripe.',
+  code:`{
+  "data": {
+    "id": "pi_3OqK8w...",
+    "client_secret": "pi_3OqK8w..._secret_kY9mP2...",
+    "amount": 100000,
+    "currency": "usd",
+    "status": "requires_payment_method"
+  }
+}`},
+ {...PH2,from:0,to:3,label:'confirmCardPayment(secret, card)',title:'Trình duyệt gửi thẻ THẲNG cho Stripe',
+  desc:'Số thẻ không bao giờ chạm server của bạn → bạn không phải tuân thủ PCI-DSS mức cao. Đây là code frontend (ví dụ với Stripe.js).',
+  file:'frontend (ví dụ Stripe.js)',
+  code:`// Frontend — ví dụ
+const stripe = Stripe("pk_test_..."); // PUBLISHABLE key
+
+const { error, paymentIntent } = await stripe.confirmCardPayment(
+  clientSecret,            // từ bước trước
+  { payment_method: { card: cardElement } }
+);
+
+if (paymentIntent?.status === "succeeded") {
+  // CHỈ để hiển thị UI "đang xử lý..."
+  // KHÔNG tự đánh dấu đơn là paid — chờ webhook!
+}`},
+ {from:3,to:0,kind:'ret',label:'kết quả (chỉ để hiện UI)',title:'Stripe báo kết quả cho trình duyệt',
+  desc:'⚠ KHÔNG TIN kết quả này để cập nhật đơn — user có thể tắt tab, mạng rớt, hoặc giả mạo. Nguồn sự thật duy nhất là webhook ở giai đoạn 3.',
+  code:`// Vì sao không tin client?
+// 1. User tắt tab ngay sau khi trả tiền -> server không bao giờ biết
+// 2. Mạng rớt giữa chừng
+// 3. User có thể giả mạo request "tôi đã trả tiền rồi"
+//
+// => Đơn CHỈ được đánh dấu paid khi Stripe chủ động
+//    gọi webhook có chữ ký hợp lệ (giai đoạn 3)`},
+ {...PH3,from:3,to:1,label:'POST /webhook + Stripe-Signature',title:'Stripe chủ động bắn webhook về server',
+  desc:'Route công khai duy nhất không cần JWT — bảo vệ bằng chữ ký HMAC thay vì token. Stripe sẽ retry nếu server không trả 2xx.',
+  file:'internal/api/rest/handlers/orderHandler.go:62',
+  code:`// route: orders.Post("/payment/webhook", h.StripeWebhook)
+//        ^ KHÔNG có middleware Authorize
+
+func (h *OrderHandler) StripeWebhook(ctx *fiber.Ctx) error {
+	signature := ctx.Get("Stripe-Signature")
+	if err := h.svc.HandleStripeEvent(ctx.Body(), signature); err != nil {
+		return response.BadRequest(ctx, err.Error())
+	}
+	return ctx.SendStatus(fiber.StatusOK)
+}`},
+ {from:1,to:1,label:'verify HMAC signature',title:'Xác thực chữ ký webhook',
+  desc:'webhook.ConstructEvent verify HMAC-SHA256 trong header bằng STRIPE_WEBHOOK_SECRET. Không có secret → không thể giả mạo webhook kể cả khi biết URL. Cũng chống replay (check timestamp).',
+  file:'pkg/payment/stripe.go:50',
+  code:`func (s *StripeClient) ValidateWebhook(payload []byte, signature string)
+	(stripe.Event, error) {
+
+	event, err := webhook.ConstructEvent(
+		payload,          // raw body (KHÔNG parse trước!)
+		signature,        // header Stripe-Signature
+		s.webhookSecret,  // whsec_... từ env
+	)
+	if err != nil {
+		return stripe.Event{}, fmt.Errorf("validation failed: %w", err)
+	}
+	return event, nil
+}`},
+ {from:1,to:1,label:'ExtractOrderID(metadata)',title:'Đọc lại order_id từ metadata',
+  desc:'"Sợi chỉ" được nhét vào ở giai đoạn 1 giờ được kéo ra: parse event JSON → lấy metadata.order_id → biết đơn nào vừa được trả tiền.',
+  file:'pkg/payment/stripe.go:59',
+  code:`func ExtractOrderID(event stripe.Event) (uint, error) {
+	var pi stripe.PaymentIntent
+	if err := json.Unmarshal(event.Data.Raw, &pi); err != nil { ... }
+
+	idStr, ok := pi.Metadata["order_id"]
+	if !ok || idStr == "" {
+		return 0, fmt.Errorf("order_id missing from metadata")
+	}
+	var id uint
+	fmt.Sscanf(idStr, "%d", &id)
+	return id, nil
+}`},
+ {from:1,to:4,label:'publish ORDER_PAID',title:'Bắn sự kiện ORDER_PAID lên SQS',
+  desc:'⚠ Đây là chỗ có bug tiềm ẩn: KHÔNG check s.sqsClient != nil như bên PlaceOrder. Stripe bật + SQS tắt → panic.',
+  file:'internal/service/orderService.go:155',
+  code:`case "payment_intent.succeeded":
+	orderID, err := payment.ExtractOrderID(event)
+	...
+	// ⚠ thiếu: if s.sqsClient != nil
+	if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
+		EventType: queue.EventOrderPaid, // "ORDER_PAID"
+		OrderID:   orderID,
+	}); sqsErr != nil {
+		log.Printf("stripe webhook: sqs publish failed ...")
+	}`},
+ {from:1,to:2,label:'UPDATE paid + confirmed',title:'Cập nhật trạng thái cuối cùng',
+  desc:'payment_status=paid VÀ status=confirmed cùng lúc — đơn chính thức được xác nhận. Nếu là payment_intent.payment_failed thì chỉ set payment_status=failed (user có thể thử trả lại).',
+  file:'internal/service/orderService.go:161',
+  code:`return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+	"payment_status": domain.PaymentStatusPaid,   // "paid"
+	"status":         domain.OrderStatusConfirmed, // "confirmed"
+})
+
+// Nhánh thất bại:
+case "payment_intent.payment_failed":
+	return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+		"payment_status": domain.PaymentStatusFailed,
+	})`},
+ {from:1,to:3,kind:'ret',label:'200 OK',title:'Báo Stripe đã xử lý xong',
+  desc:'Trả 200 để Stripe ngừng retry. Nếu trả lỗi hoặc timeout, Stripe sẽ gửi LẠI event này (exponential backoff, tới 3 ngày) → handler phải an toàn khi chạy lặp (idempotent).',
+  code:`return ctx.SendStatus(fiber.StatusOK)
+
+// Stripe retry schedule khi không nhận được 2xx:
+//   ngay lập tức, 5 phút, 30 phút, 2 giờ, ... tối đa 3 ngày
+// => webhook handler PHẢI idempotent`},
+]);
+
+/* ═══════════ 4. SQS stage details ═══════════ */
+const SQS_STAGES=[
+ {t:'1 · SendMessage — producer publish',f:'pkg/queue/sqs.go:45',
+  d:'App này marshal OrderEvent thành JSON rồi SendMessage. MessageAttribute event_type cho phép consumer/Lambda lọc loại event mà không cần parse body.',
+  c:`func (q *SQSClient) PublishOrderEvent(event OrderEvent) error {
+	body, _ := json.Marshal(event)
+	_, err = q.client.SendMessage(&sqs.SendMessageInput{
+		QueueUrl:    aws.String(q.queueURL),
+		MessageBody: aws.String(string(body)),
+		MessageAttributes: map[string]*sqs.MessageAttributeValue{
+			"event_type": {
+				DataType:    aws.String("String"),
+				StringValue: aws.String(string(event.EventType)),
+			},
+		},
+	})
+	return err
+}
+
+// MessageBody thực tế:
+// {"event_type":"ORDER_PAID","order_id":5,"user_id":3,"amount":1000}`},
+ {t:'2 · Message nằm trong queue',f:'',
+  d:'Message được lưu redundant trên nhiều server của AWS, chờ tối đa 14 ngày (mặc định 4 ngày). Producer và consumer hoàn toàn không biết nhau — consumer chết cả tiếng cũng không mất message.',
+  c:`# Xem có bao nhiêu message đang chờ:
+aws sqs get-queue-attributes \\
+  --queue-url $QUEUE_URL \\
+  --attribute-names ApproximateNumberOfMessages \\
+                    ApproximateNumberOfMessagesNotVisible
+
+# MessageRetentionPeriod: 60s -> 14 ngày (default 4 ngày)`},
+ {t:'3 · ReceiveMessage — long polling',f:'consumer (ví dụ — ngoài repo này)',
+  d:'Consumer poll queue. WaitTimeSeconds=20 (long polling) — giữ kết nối mở tới 20s thay vì hỏi liên tục → giảm số request rỗng, giảm chi phí, nhận message gần như tức thì.',
+  c:`// Ví dụ consumer Go:
+for {
+	out, err := sqsClient.ReceiveMessage(&sqs.ReceiveMessageInput{
+		QueueUrl:            aws.String(queueURL),
+		MaxNumberOfMessages: aws.Int64(10),
+		WaitTimeSeconds:     aws.Int64(20), // long polling
+		MessageAttributeNames: aws.StringSlice([]string{"event_type"}),
+	})
+	for _, msg := range out.Messages {
+		var ev OrderEvent
+		json.Unmarshal([]byte(*msg.Body), &ev)
+		if err := handle(ev); err != nil {
+			continue // KHÔNG delete -> message sẽ hiện lại
+		}
+		// xử lý OK -> xoá (bước 5a)
+		sqsClient.DeleteMessage(&sqs.DeleteMessageInput{
+			QueueUrl:      aws.String(queueURL),
+			ReceiptHandle: msg.ReceiptHandle,
+		})
+	}
+}`},
+ {t:'4 · Visibility timeout — message bị ẩn',f:'',
+  d:'Ngay khi một consumer nhận message, SQS ẨN nó khỏi các consumer khác trong VisibilityTimeout (mặc định 30s). Đây là cơ chế "khoá mềm": nếu consumer xử lý xong và delete kịp → không ai thấy lại; nếu consumer chết → hết timeout message tự HIỆN LẠI cho consumer khác.',
+  c:`#  timeline của 1 message:
+#
+#  SendMessage ──> [hiện trong queue]
+#                       │ ReceiveMessage (consumer A)
+#                       ▼
+#                  [ẨN 30 giây]
+#                   │         │
+#        delete kịp │         │ consumer A chết / xử lý quá 30s
+#                   ▼         ▼
+#               (biến mất)  [HIỆN LẠI] ──> consumer B nhận
+#
+# Đang xử lý mà cần thêm giờ? Gia hạn:
+aws sqs change-message-visibility \\
+  --receipt-handle $HANDLE --visibility-timeout 120`},
+ {t:'5a · DeleteMessage — hoàn tất',f:'',
+  d:'SQS không tự xoá message sau khi giao — consumer phải CHỦ ĐỘNG delete bằng ReceiptHandle (chỉ valid trong lần nhận đó). Quên delete = message được xử lý lặp vô hạn.',
+  c:`sqsClient.DeleteMessage(&sqs.DeleteMessageInput{
+	QueueUrl:      aws.String(queueURL),
+	ReceiptHandle: msg.ReceiptHandle, // không phải MessageId!
+})
+
+// Quy tắc vàng: CHỈ delete SAU KHI xử lý thành công.
+// Delete trước xử lý = "at-most-once" = có thể MẤT event.`},
+ {t:'5b · Thất bại nhiều lần → Dead Letter Queue',f:'',
+  d:'Mỗi lần message hiện lại, ReceiveCount tăng. Vượt maxReceiveCount (vd 5) → SQS tự chuyển sang DLQ. Message "độc" (poison message — vd JSON hỏng, bug consumer) không chặn queue chính, và bạn có chỗ để debug.',
+  c:`# RedrivePolicy khi tạo queue chính:
+{
+  "deadLetterTargetArn": "arn:aws:sqs:...:order-events-dlq",
+  "maxReceiveCount": "5"
+}
+
+# Debug: đọc message trong DLQ
+aws sqs receive-message --queue-url $DLQ_URL
+
+# Sửa bug xong, bơm lại message từ DLQ về queue chính:
+aws sqs start-message-move-task \\
+  --source-arn arn:aws:sqs:...:order-events-dlq`},
+];
+const sqsDetail=document.getElementById('sqs-detail');
+function showSqs(i){
+  document.querySelectorAll('.sqs-stage').forEach(s=>s.classList.toggle('sel',+s.dataset.s===i));
+  const st=SQS_STAGES[i];
+  sqsDetail.innerHTML=`<h4>${st.t}</h4><div class="desc">${st.d}</div>${st.f?`<div class="floc">📄 ${st.f}</div>`:''}<pre class="code">${hl(st.c)}</pre>`;
+}
+document.querySelectorAll('.sqs-stage').forEach(s=>s.onclick=()=>showSqs(+s.dataset.s));
+showSqs(0);
+
+/* ═══════════ 5. state machine edge details ═══════════ */
+const SM_EDGES={
+ confirm:{t:'pending → confirmed (đồng thời pending → paid)',
+  d:'Kích hoạt bởi webhook payment_intent.succeeded. Cả 2 state machine chuyển cùng một câu UPDATE.',
+  f:'internal/service/orderService.go:148',
+  c:`case "payment_intent.succeeded":
+	orderID, err := payment.ExtractOrderID(event)
+	...
+	return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+		"payment_status": domain.PaymentStatusPaid,
+		"status":         domain.OrderStatusConfirmed,
+	})`},
+ paid:{t:'PaymentStatus: pending → paid',
+  d:'Cùng câu UPDATE với pending → confirmed ở trên — webhook succeeded chuyển cả 2 trạng thái một lúc.',
+  f:'internal/service/orderService.go:161',
+  c:`return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+	"payment_status": domain.PaymentStatusPaid,
+	"status":         domain.OrderStatusConfirmed,
+})`},
+ failed:{t:'PaymentStatus: pending → failed',
+  d:'Kích hoạt bởi webhook payment_intent.payment_failed (thẻ bị từ chối, hết tiền…). CHỈ đổi payment_status — Order.Status vẫn pending để user thử trả lại.',
+  f:'internal/service/orderService.go:166',
+  c:`case "payment_intent.payment_failed":
+	orderID, err := payment.ExtractOrderID(event)
+	if err != nil {
+		return nil
+	}
+	return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+		"payment_status": domain.PaymentStatusFailed,
+	})`},
+ retry:{t:'failed → (thử lại) → pending/paid',
+  d:'Không phải transition trong DB — user gọi lại POST /orders/payment/intent. Guard chỉ chặn đơn ĐÃ paid, nên đơn failed vẫn tạo intent mới được.',
+  f:'internal/service/orderService.go:119',
+  c:`// Guard CHỈ chặn paid — failed vẫn được thử lại:
+if order.PaymentStatus == domain.PaymentStatusPaid {
+	return nil, errors.New("order is already paid")
+}
+// -> tạo PaymentIntent mới, lặp lại Flow 3`},
+};
+document.querySelectorAll('svg .edge.impl').forEach(e=>{
+  e.addEventListener('click',()=>{
+    document.querySelectorAll('svg .edge').forEach(x=>x.classList.remove('sel-e'));
+    e.classList.add('sel-e');
+    const d=SM_EDGES[e.dataset.e];
+    if(!d) return;
+    document.getElementById('sm-detail').innerHTML=
+      `<h4 style="color:var(--accent);font-size:15px">${d.t}</h4><p style="font-size:13.5px;margin:6px 0 8px">${d.d}</p>
+       <div class="floc" style="font-family:var(--mono);font-size:11px;color:var(--purple);margin-bottom:6px">📄 ${d.f}</div>
+       <pre class="code">${hl(d.c)}</pre>`;
+  });
+});
+
+/* ═══════════ 2. ERD ═══════════ */
+const ENT_W=188, ROW_H=24, HEAD_H=30;
+const ENTITIES={
+  users:          {label:'users', ic:'👤', x:690, y:300, fields:[['id','pk'],['email',null],['user_type',null]]},
+  categories:     {label:'categories', ic:'🏷️', x:690, y:50, fields:[['id','pk'],['name',null],['parent_id','fk']]},
+  products:       {label:'products', ic:'📦', x:350, y:160, fields:[['id','pk'],['category_id','fk'],['seller_id','fk'],['price',null]]},
+  product_images: {label:'product_images', ic:'🖼️', x:40, y:70, fields:[['id','pk'],['product_id','fk'],['url',null]]},
+  carts:          {label:'carts', ic:'🛒', x:350, y:380, fields:[['id','pk'],['user_id','fk']]},
+  cart_items:     {label:'cart_items', ic:'➕', x:40, y:250, fields:[['id','pk'],['cart_id','fk'],['product_id','fk']]},
+  orders:         {label:'orders', ic:'🧾', x:350, y:520, fields:[['id','pk'],['user_id','fk'],['payment_status',null]]},
+  order_items:    {label:'order_items', ic:'📑', x:40, y:420, fields:[['id','pk'],['order_id','fk'],['product_id','fk']]},
+  addresses:      {label:'addresses', ic:'📍', x:600, y:560, fields:[['id','pk'],['user_id','fk']]},
+  refresh_tokens: {label:'refresh_tokens', ic:'🔑', x:880, y:560, fields:[['id','pk'],['user_id','fk']]},
+};
+// child references parent via column `col`, with OnDelete `rule`
+const RELS=[
+  {c:'categories',     col:'parent_id',   p:'categories', rule:'setnull',  self:true},
+  {c:'products',       col:'category_id', p:'categories', rule:'restrict'},
+  {c:'products',       col:'seller_id',   p:'users',      rule:'restrict'},
+  {c:'product_images', col:'product_id',  p:'products',   rule:'cascade'},
+  {c:'carts',          col:'user_id',     p:'users',      rule:'cascade'},
+  {c:'cart_items',     col:'cart_id',     p:'carts',      rule:'cascade'},
+  {c:'cart_items',     col:'product_id',  p:'products',   rule:'cascade'},
+  {c:'orders',         col:'user_id',     p:'users',      rule:'restrict'},
+  {c:'order_items',    col:'order_id',    p:'orders',     rule:'cascade'},
+  {c:'order_items',    col:'product_id',  p:'products',   rule:'restrict'},
+  {c:'addresses',      col:'user_id',     p:'users',      rule:'cascade'},
+  {c:'refresh_tokens', col:'user_id',     p:'users',      rule:'cascade'},
+];
+const RULE_TXT={cascade:'CASCADE',restrict:'RESTRICT',setnull:'SET NULL'};
+
+(function buildERD(){
+  const canvas=document.getElementById('erd-canvas');
+  const svg=document.getElementById('erd-svg');
+  const SVGNS='http://www.w3.org/2000/svg';
+  // render entity boxes
+  for(const [id,e] of Object.entries(ENTITIES)){
+    e.w=ENT_W; e.h=HEAD_H + e.fields.length*ROW_H;
+    const div=document.createElement('div');
+    div.className='ent'; div.id='ent-'+id;
+    div.style.left=e.x+'px'; div.style.top=e.y+'px';
+    div.innerHTML=`<div class="eh"><span class="ec">${e.ic}</span>${e.label}</div>`+
+      e.fields.map(([n,k])=>`<div class="row${k==='fk'?' fkrow':''}">${k?`<span class="key ${k}">${k.toUpperCase()}</span>`:''}${n}</div>`).join('');
+    div.onclick=()=>selectEnt(id);
+    canvas.appendChild(div);
+  }
+  // rect border anchor toward a target point
+  function anchor(e, tx, ty){
+    const cx=e.x+e.w/2, cy=e.y+e.h/2;
+    let dx=tx-cx, dy=ty-cy;
+    if(dx===0&&dy===0) return {x:cx,y:cy};
+    const sx=dx!==0?(e.w/2)/Math.abs(dx):Infinity;
+    const sy=dy!==0?(e.h/2)/Math.abs(dy):Infinity;
+    const t=Math.min(sx,sy);
+    return {x:cx+dx*t, y:cy+dy*t};
+  }
+  RELS.forEach((r,i)=>{
+    const ce=ENTITIES[r.c], pe=ENTITIES[r.p];
+    let path, dot, lx, ly;
+    if(r.self){
+      // loop on top-right corner of the box
+      const x=ce.x+ce.w-30, y=ce.y;
+      path=document.createElementNS(SVGNS,'path');
+      path.setAttribute('d',`M${x},${y} C${x+30},${y-46} ${x+70},${y+20} ${ce.x+ce.w},${y+22}`);
+      dot={x:ce.x+ce.w, y:y+22};
+      lx=x+52; ly=y-20;
+    } else {
+      const pc={x:pe.x+pe.w/2, y:pe.y+pe.h/2};
+      const cc={x:ce.x+ce.w/2, y:ce.y+ce.h/2};
+      const a=anchor(ce, pc.x, pc.y);   // child (many) side
+      const b=anchor(pe, cc.x, cc.y);   // parent (one) side
+      path=document.createElementNS(SVGNS,'path');
+      path.setAttribute('d',`M${a.x},${a.y} L${b.x},${b.y}`);
+      dot=a;
+      lx=(a.x+b.x)/2; ly=(a.y+b.y)/2-4;
+    }
+    path.setAttribute('class',`erd-edge ${r.rule}`);
+    path.dataset.i=i;
+    svg.appendChild(path);
+    // crow's-foot substitute: filled dot at the FK (many) side
+    const c=document.createElementNS(SVGNS,'circle');
+    c.setAttribute('cx',dot.x); c.setAttribute('cy',dot.y); c.setAttribute('r',4);
+    c.setAttribute('class',`erd-dot ${r.rule}`);
+    c.dataset.i=i;
+    svg.appendChild(c);
+    // rule label (hidden until highlight)
+    const t=document.createElementNS(SVGNS,'text');
+    t.setAttribute('x',lx); t.setAttribute('y',ly);
+    t.setAttribute('text-anchor','middle');
+    t.setAttribute('class','erd-rule'); t.dataset.i=i;
+    t.textContent=RULE_TXT[r.rule];
+    svg.appendChild(t);
+    r._els={path,dot:c,label:t};
+  });
+
+  const detail=document.getElementById('erd-detail');
+  function selectEnt(id){
+    document.querySelectorAll('.ent').forEach(x=>x.classList.remove('sel','dim','rel'));
+    document.getElementById('ent-'+id).classList.add('sel');
+    const related=new Set([id]);
+    RELS.forEach((r,i)=>{
+      const involved=(r.c===id||r.p===id);
+      r._els.path.classList.toggle('hot',involved);
+      r._els.path.classList.toggle('dim',!involved);
+      r._els.dot.classList.toggle('dim',!involved);
+      r._els.label.classList.toggle('show',involved);
+      if(involved){related.add(r.c); related.add(r.p);}
+    });
+    document.querySelectorAll('.ent').forEach(x=>{
+      const eid=x.id.replace('ent-','');
+      if(eid===id) return;
+      if(related.has(eid)) x.classList.add('rel'); else x.classList.add('dim');
+    });
+    // build detail
+    const out=RELS.filter(r=>r.c===id);
+    const inc=RELS.filter(r=>r.p===id && r.c!==id);
+    const self=RELS.filter(r=>r.c===id && r.p===id);
+    let html=`<h4>${ENTITIES[id].ic} ${id}</h4>`;
+    if(out.length){
+      html+=`<p style="font-size:12.5px;color:var(--muted);margin:10px 0 4px">Bảng này trỏ tới (${out.length} FK):</p>`;
+      out.forEach(r=>{ if(r.self) return;
+        html+=`<div class="rel-line"><b style="color:var(--green)">${r.c}.${r.col}</b> <span class="arrow">──▶</span> <b>${r.p}.id</b><span class="pill ${r.rule}">OnDelete: ${RULE_TXT[r.rule]}</span></div>`;});
+    }
+    if(self.length){
+      html+=`<div class="rel-line"><b style="color:var(--green)">${id}.parent_id</b> <span class="arrow">──▶</span> <b>${id}.id</b> (tự tham chiếu cha–con)<span class="pill setnull">OnDelete: SET NULL</span></div>`;
+    }
+    if(inc.length){
+      html+=`<p style="font-size:12.5px;color:var(--muted);margin:12px 0 4px">Được tham chiếu bởi (${inc.length} bảng):</p>`;
+      inc.forEach(r=>{
+        html+=`<div class="rel-line"><b>${id}.id</b> <span class="arrow">◀──</span> <b style="color:var(--green)">${r.c}.${r.col}</b><span class="pill ${r.rule}">OnDelete: ${RULE_TXT[r.rule]}</span></div>`;});
+    }
+    if(!out.length&&!inc.length&&!self.length) html+=`<p>Không có quan hệ FK.</p>`;
+    detail.innerHTML=html;
+  }
+  window._erdSelect=selectEnt;
+})();
+
+/* ═══════════ sidebar scroll-spy ═══════════ */
+const links=[...document.querySelectorAll('.sidebar a')];
+const secs=links.map(l=>document.querySelector(l.getAttribute('href')));
+window.addEventListener('scroll',()=>{
+  let i=secs.findLastIndex(s=>s.getBoundingClientRect().top<140);
+  if(i<0)i=0;
+  links.forEach((l,j)=>l.classList.toggle('active',j===i));
+},{passive:true});
+</script>
+</body>
+</html>
