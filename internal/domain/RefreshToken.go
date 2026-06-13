@@ -5,6 +5,7 @@ import "time"
 type RefreshToken struct {
 	ID        uint       `json:"id" gorm:"primaryKey"`
 	UserID    uint       `json:"-" gorm:"not null;index"`
+	User      User       `json:"-" gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 	TokenHash string     `json:"-" gorm:"uniqueIndex;not null"`
 	UserAgent string     `json:"user_agent"`
 	IPAddress string     `json:"ip_address"`
