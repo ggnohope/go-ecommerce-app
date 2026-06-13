@@ -237,10 +237,11 @@ func (h *UserHandler) CreateProfile(ctx *fiber.Ctx) error {
 
 // BecomeSeller godoc
 // @Summary     Upgrade account to seller
+// @Description Upgrades the account and returns a fresh token pair carrying the new seller role. Clients must replace their stored tokens with the returned pair.
 // @Tags        profile
 // @Produce     json
 // @Security    BearerAuth
-// @Success     200 {object} response.APIResponse
+// @Success     200 {object} response.APIResponse{data=dto.TokenPair}
 // @Failure     400 {object} response.ErrorResponse
 // @Failure     401 {object} response.ErrorResponse
 // @Router      /user/me/become-seller [post]
@@ -249,10 +250,11 @@ func (h *UserHandler) BecomeSeller(ctx *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(ctx, "unauthorized")
 	}
-	if err := h.svc.BecomeSeller(user.ID); err != nil {
+	pair, err := h.svc.BecomeSeller(user.ID, ctx.Get("User-Agent"), ctx.IP())
+	if err != nil {
 		return response.BadRequest(ctx, err.Error())
 	}
-	return response.OK(ctx, fiber.Map{"message": "seller account activated"})
+	return response.OK(ctx, pair)
 }
 
 // ── Addresses ─────────────────────────────────────────────────────────────────

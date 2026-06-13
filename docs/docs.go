@@ -995,6 +995,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Upgrades the account and returns a fresh token pair carrying the new seller role. Clients must replace their stored tokens with the returned pair.",
                 "produces": [
                     "application/json"
                 ],
@@ -1006,7 +1007,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/response.APIResponse"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.TokenPair"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {

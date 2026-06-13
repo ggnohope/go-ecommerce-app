@@ -938,13 +938,21 @@ paths:
       - addresses
   /user/me/become-seller:
     post:
+      description: Upgrades the account and returns a fresh token pair carrying the
+        new seller role. Clients must replace their stored tokens with the returned
+        pair.
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/response.APIResponse'
+            allOf:
+            - $ref: '#/definitions/response.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TokenPair'
+              type: object
         "400":
           description: Bad Request
           schema:

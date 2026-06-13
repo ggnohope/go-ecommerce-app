@@ -29,7 +29,7 @@ type UserService interface {
 	// Profile
 	CreateProfile(userID uint, input dto.UserProfile) error
 	GetProfile(userID uint) (*domain.User, error)
-	BecomeSeller(userID uint) error
+	BecomeSeller(userID uint, userAgent, ip string) (dto.TokenPair, error)
 
 	// Addresses
 	AddAddress(userID uint, input dto.AddressInput) (*domain.Address, error)
@@ -253,26 +253,30 @@ func (u *userService) GetProfile(userID uint) (*domain.User, error) {
 	return u.repo.FindUserById(userID)
 }
 
-func (u *userService) BecomeSeller(userID uint) error {
+// BecomeSeller upgrades the user and issues a fresh token pair so the new
+// "seller" role claim takes effect immediately (the old access token still
+// carries "buyer" until it expires).
+func (u *userService) BecomeSeller(userID uint, userAgent, ip string) (dto.TokenPair, error) {
 	user, err := u.repo.FindUserById(userID)
 	if err != nil {
-		return errors.New("user not found")
+		return dto.TokenPair{}, errors.New("user not found")
 	}
 	if user.UserType == "seller" {
-		return errors.New("user is already a seller")
+		return dto.TokenPair{}, errors.New("user is already a seller")
 	}
 	if !user.Verified {
-		return errors.New("account must be verified before becoming a seller")
+		return dto.TokenPair{}, errors.New("account must be verified before becoming a seller")
 	}
-	if _, err = u.repo.UpdateUser(userID, domain.User{UserType: "seller"}); err != nil {
-		return err
+	updated, err := u.repo.UpdateUser(userID, domain.User{UserType: "seller"})
+	if err != nil {
+		return dto.TokenPair{}, err
 	}
 	slog.Info("user upgraded to seller", "user_id", userID)
 	body := "Congratulations! Your seller account is now active. You can list products on our platform."
 	if err := u.notification.SendEmail(user.Email, "Seller Account Activated", body); err != nil {
 		slog.Warn("seller activation email failed", "user_id", userID, "err", err)
 	}
-	return nil
+	return u.issueTokenPair(updated, userAgent, ip)
 }
 
 // ── Addresses ─────────────────────────────────────────────────────────────────
