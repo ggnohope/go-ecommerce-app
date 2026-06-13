@@ -5,7 +5,7 @@ import (
 	"go-ecommerce-app/internal/api/middleware"
 	"go-ecommerce-app/internal/api/rest"
 	"go-ecommerce-app/internal/api/rest/handlers"
-	"go-ecommerce-app/internal/domain"
+	"go-ecommerce-app/internal/database"
 	"go-ecommerce-app/internal/helper"
 	"log/slog"
 	"os"
@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	fiberswagger "github.com/gofiber/swagger"
 	"github.com/gofiber/fiber/v2"
+	fiberswagger "github.com/gofiber/swagger"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -43,21 +43,18 @@ func StartServer(config configs.AppConfig) {
 	}
 	slog.Info("database connection established")
 
-	db.AutoMigrate(
-		&domain.User{},
-		&domain.RefreshToken{},
-		&domain.Address{},
-		&domain.Category{},
-		&domain.Product{},
-		&domain.ProductImage{},
-		&domain.Cart{},
-		&domain.CartItem{},
-		&domain.Order{},
-		&domain.OrderItem{},
-	)
+	// Apply pending SQL migrations (idempotent — already-applied ones are skipped).
+	sqlDB, err := db.DB()
+	if err != nil {
+		slog.Error("failed to obtain sql.DB", "err", err)
+		os.Exit(1)
+	}
+	if err := database.Up(sqlDB); err != nil {
+		slog.Error("database migration failed", "err", err)
+		os.Exit(1)
+	}
 
 	// Health check — probes the DB on every call.
-	sqlDB, _ := db.DB()
 	app.Get("/health", func(c *fiber.Ctx) error {
 		if err := sqlDB.Ping(); err != nil {
 			slog.Error("health check db ping failed", "err", err)
