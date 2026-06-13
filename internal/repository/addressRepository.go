@@ -33,7 +33,7 @@ func (r *addressRepository) Create(address domain.Address) (*domain.Address, err
 func (r *addressRepository) FindByUserID(userID uint) ([]domain.Address, error) {
 	var addresses []domain.Address
 	err := r.db.Where("user_id = ?", userID).
-		Order("is_default desc, created_at desc").
+		Order("is_default desc, id desc").
 		Find(&addresses).Error
 	return addresses, err
 }
