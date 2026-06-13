@@ -92,8 +92,14 @@ func (r *productRepository) UpdateProduct(id uint, updates map[string]interface{
 	return &product, nil
 }
 
+// DeleteProduct soft-deletes a product by marking it "archived" rather than
+// removing the row. This hides it from the catalog (which filters status =
+// 'active') while preserving order history — order_items reference products
+// with an ON DELETE RESTRICT constraint, so a hard delete would fail for any
+// product that has ever been ordered.
 func (r *productRepository) DeleteProduct(id uint) error {
-	return r.db.Delete(&domain.Product{}, id).Error
+	return r.db.Model(&domain.Product{}).Where("id = ?", id).
+		Update("status", "archived").Error
 }
 
 func (r *productRepository) FindCategories() ([]domain.Category, error) {
