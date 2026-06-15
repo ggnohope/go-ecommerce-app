@@ -152,15 +152,16 @@ func (s *orderService) HandleStripeEvent(payload []byte, signature string) error
 			log.Printf("stripe webhook: %v", err)
 			return nil
 		}
-		if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
-			EventType: queue.EventOrderPaid,
-			OrderID:   orderID,
-		}); sqsErr != nil {
-			log.Printf("stripe webhook: sqs publish failed order=%d err=%v", orderID, sqsErr)
+		if s.sqsClient != nil {
+			if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
+				EventType: queue.EventOrderPaid,
+				OrderID:   orderID,
+			}); sqsErr != nil {
+				log.Printf("stripe webhook: sqs publish failed order=%d err=%v", orderID, sqsErr)
+			}
 		}
 		return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
 			"payment_status": domain.PaymentStatusPaid,
-			"status":         domain.OrderStatusConfirmed,
 		})
 
 	case "payment_intent.payment_failed":

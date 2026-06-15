@@ -114,17 +114,35 @@ Vài điều đáng chú ý ngay ở đây:
   đó mất — chấp nhận được với loại event này.)
 
 Một event thứ hai, `ORDER_PAID`, được publish ở chỗ khác — khi Stripe báo thanh toán
-thành công qua webhook:
+thành công qua webhook. Quan trọng: API ở đây **chỉ** đánh dấu order là `paid`
+(`payment_status=paid`) rồi publish `ORDER_PAID`. Nó **không** tự chuyển order sang
+`confirmed`. Việc chuyển sang `confirmed` (và gửi email "đã nhận tiền") thuộc về **worker** —
+xem chương 5. The API only marks the order *paid* and publishes the event; the *worker*
+owns the transition to `confirmed`.
 
 ```go
-// internal/service/orderService.go:155-160
-		if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
-			EventType: queue.EventOrderPaid,
-			OrderID:   orderID,
-		}); sqsErr != nil {
-			log.Printf("stripe webhook: sqs publish failed order=%d err=%v", orderID, sqsErr)
+// internal/service/orderService.go:149-165
+	case "payment_intent.succeeded":
+		orderID, err := payment.ExtractOrderID(event)
+		if err != nil {
+			log.Printf("stripe webhook: %v", err)
+			return nil
 		}
+		if s.sqsClient != nil {
+			if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
+				EventType: queue.EventOrderPaid,
+				OrderID:   orderID,
+			}); sqsErr != nil {
+				log.Printf("stripe webhook: sqs publish failed order=%d err=%v", orderID, sqsErr)
+			}
+		}
+		return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+			"payment_status": domain.PaymentStatusPaid,
+		})
 ```
+
+Để ý cùng pattern `if s.sqsClient != nil` như ở `PlaceOrder`: SQS optional, không cấu
+hình thì bỏ qua publish nhưng order vẫn được đánh dấu `paid`.
 
 Vậy `PublishOrderEvent` thực sự làm gì? Đây là toàn bộ hàm:
 
@@ -481,10 +499,17 @@ func (c *Consumer) deleteQuietly(receiptHandle string) {
 > (mở DLQ ra xem body, log) mà không mất chúng; (3) sau khi sửa bug, có thể **redrive**
 > (đẩy ngược) message từ DLQ về queue chính để xử lý lại.
 
+**Worker sở hữu việc chuyển sang `confirmed`.** Nhớ ở chương producer: API webhook chỉ đặt
+`payment_status=paid` rồi publish `ORDER_PAID`. Chính **worker** mới chuyển order từ `paid`
+sang `confirmed` và gửi email "đã nhận tiền". The worker — not the API — owns the
+`confirmed` transition.
+
 **Idempotency — vì sao và làm thế nào.** Vì at-least-once, một message có thể chạy 2 lần.
 Với `ORDER_PAID`, chạy 2 lần mà không cẩn thận = cập nhật trạng thái 2 lần, gửi 2 email "đã
 nhận tiền". Code chặn việc đó bằng một **idempotency guard** đơn giản: kiểm tra trạng thái
-trước khi hành động.
+trước khi hành động. Vì giờ API **không** còn tự set `confirmed` nữa, guard này làm việc
+thật chứ không phải trang trí: lần giao đầu tiên order chưa `confirmed` → worker confirm +
+gửi mail; bản trùng giao lại thấy đã `confirmed` → bỏ qua an toàn.
 
 ```go
 // internal/worker/handlers.go:58-79
