@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/aws/aws-sdk-go/service/sqs"
 
 	"go-ecommerce-app/pkg/queue"
 )
+
+// receiveErrorBackoff is how long Run waits after a failed receive before
+// retrying, so a persistent error (bad credentials, network down, deleted
+// queue) doesn't busy-loop and peg a CPU core.
+const receiveErrorBackoff = 5 * time.Second
 
 // messageReceiver is the subset of *queue.SQSClient the consumer needs.
 type messageReceiver interface {
@@ -37,6 +43,14 @@ func (c *Consumer) Run(ctx context.Context) {
 		default:
 			if err := c.processOnce(); err != nil {
 				slog.Error("worker: receive failed, will retry", "err", err)
+				// Back off before retrying so a persistent receive error
+				// doesn't hot-spin. Stay responsive to shutdown.
+				select {
+				case <-ctx.Done():
+					slog.Info("worker: shutdown signal received during backoff, stopping")
+					return
+				case <-time.After(receiveErrorBackoff):
+				}
 			}
 		}
 	}
@@ -51,6 +65,12 @@ func (c *Consumer) processOnce() error {
 		return err
 	}
 	for _, m := range msgs {
+		if m.Body == nil {
+			// Defensive: a message without a body should never happen, but
+			// dereferencing a nil Body would panic and kill the worker.
+			slog.Error("worker: message has nil body, skipping")
+			continue
+		}
 		var event queue.OrderEvent
 		if err := json.Unmarshal([]byte(*m.Body), &event); err != nil {
 			// Poison message: it will never parse, so retrying forever is

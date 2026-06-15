@@ -44,6 +44,9 @@ func (d *Dispatcher) handleOrderPlaced(event queue.OrderEvent) error {
 	if err != nil {
 		return fmt.Errorf("worker: load order %d: %w", event.OrderID, err)
 	}
+	// No idempotency guard here: SQS is at-least-once, so a redelivered
+	// ORDER_PLACED may send a duplicate confirmation email. That's an
+	// accepted trade-off — a duplicate confirmation is benign.
 	body := fmt.Sprintf("Your order #%d for $%.2f has been received.", order.ID, order.TotalAmount)
 	if err := d.notifier.SendEmail(order.User.Email, "Order confirmation", body); err != nil {
 		return fmt.Errorf("worker: send confirmation email for order %d: %w", order.ID, err)
