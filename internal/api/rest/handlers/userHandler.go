@@ -532,7 +532,7 @@ func (h *UserHandler) GetOrder(ctx *fiber.Ctx) error {
 func SetupUserRoutes(restHandler *rest.RestHandler) {
 	userSvc := service.NewUserService(restHandler.DB, restHandler.Auth, restHandler.NotificationClient)
 	cartSvc := service.NewCartService(restHandler.DB)
-	orderSvc := service.NewOrderService(restHandler.DB, restHandler.SQSClient, restHandler.StripeClient)
+	orderSvc := service.NewOrderService(restHandler.DB, restHandler.SQSClient, restHandler.PayOSClient)
 
 	h := UserHandler{svc: userSvc, cartSvc: cartSvc, orderSvc: orderSvc}
 	authLimit := middleware.AuthRateLimiter()

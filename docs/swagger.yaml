@@ -220,7 +220,7 @@ definitions:
       parent_id:
         type: integer
     type: object
-  dto.CreatePaymentIntentInput:
+  dto.CreatePaymentLinkInput:
     properties:
       order_id:
         type: integer
@@ -345,7 +345,7 @@ info:
   contact: {}
   description: Production-grade e-commerce REST API built with Go, Fiber v2, GORM,
     and PostgreSQL. Backed by AWS SES/SNS for notifications, AWS S3 for image storage,
-    AWS SQS for order event streaming, and Stripe for payments.
+    AWS SQS for order event streaming, and payOS for payments.
   title: Go E-Commerce API
   version: "1.0"
 paths:
@@ -372,7 +372,7 @@ paths:
       summary: List all product categories
       tags:
       - products
-  /orders/payment/intent:
+  /orders/payment/link:
     post:
       consumes:
       - application/json
@@ -382,7 +382,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/dto.CreatePaymentIntentInput'
+          $ref: '#/definitions/dto.CreatePaymentLinkInput'
       produces:
       - application/json
       responses:
@@ -404,21 +404,15 @@ paths:
             $ref: '#/definitions/response.ErrorResponse'
       security:
       - BearerAuth: []
-      summary: Create a Stripe payment intent for an order
+      summary: Create a payOS payment link for an order
       tags:
       - orders
   /orders/payment/webhook:
     post:
       consumes:
       - application/json
-      description: Receives and processes Stripe payment events. Should only be called
-        by Stripe.
-      parameters:
-      - description: Stripe webhook signature
-        in: header
-        name: Stripe-Signature
-        required: true
-        type: string
+      description: Receives and processes payOS payment events. Should only be called
+        by payOS.
       produces:
       - application/json
       responses:
@@ -428,7 +422,7 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/response.ErrorResponse'
-      summary: Stripe webhook receiver
+      summary: payOS webhook receiver
       tags:
       - orders
   /products:

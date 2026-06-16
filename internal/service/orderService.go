@@ -17,27 +17,27 @@ type OrderService interface {
 	PlaceOrder(userID uint, input dto.PlaceOrderInput) (*domain.Order, error)
 	GetOrders(userID uint) ([]domain.Order, error)
 	GetOrder(orderID uint, userID uint) (*domain.Order, error)
-	CreatePaymentIntent(orderID uint, userID uint) (*payment.PaymentIntent, error)
-	HandleStripeEvent(payload []byte, signature string) error
+	CreatePaymentLink(orderID uint, userID uint) (*payment.PaymentLink, error)
+	HandlePayOSWebhook(payload []byte) error
 }
 
 type orderService struct {
-	orderRepo    repository.OrderRepository
-	cartRepo     repository.CartRepository
-	sqsClient    *queue.SQSClient
-	stripeClient *payment.StripeClient
+	orderRepo   repository.OrderRepository
+	cartRepo    repository.CartRepository
+	sqsClient   *queue.SQSClient
+	payosClient *payment.PayOSClient
 }
 
 func NewOrderService(
 	db *gorm.DB,
 	sqsClient *queue.SQSClient,
-	stripeClient *payment.StripeClient,
+	payosClient *payment.PayOSClient,
 ) OrderService {
 	return &orderService{
-		orderRepo:    repository.NewOrderRepository(db),
-		cartRepo:     repository.NewCartRepository(db),
-		sqsClient:    sqsClient,
-		stripeClient: stripeClient,
+		orderRepo:   repository.NewOrderRepository(db),
+		cartRepo:    repository.NewCartRepository(db),
+		sqsClient:   sqsClient,
+		payosClient: payosClient,
 	}
 }
 
@@ -104,8 +104,8 @@ func (s *orderService) GetOrder(orderID uint, userID uint) (*domain.Order, error
 	return order, nil
 }
 
-func (s *orderService) CreatePaymentIntent(orderID uint, userID uint) (*payment.PaymentIntent, error) {
-	if s.stripeClient == nil {
+func (s *orderService) CreatePaymentLink(orderID uint, userID uint) (*payment.PaymentLink, error) {
+	if s.payosClient == nil {
 		return nil, errors.New("payment service not configured")
 	}
 
@@ -120,59 +120,68 @@ func (s *orderService) CreatePaymentIntent(orderID uint, userID uint) (*payment.
 		return nil, errors.New("order is already paid")
 	}
 
-	amountCents := int64(math.Round(order.TotalAmount * 100))
-	pi, err := s.stripeClient.CreatePaymentIntent(orderID, amountCents)
+	// TotalAmount is treated as VND (payOS only accepts integer dong).
+	amountVND := int64(math.Round(order.TotalAmount))
+	link, err := s.payosClient.CreatePaymentLink(orderID, amountVND)
 	if err != nil {
 		return nil, err
 	}
 
+	// Reuse the existing payment_intent_id column to store payOS's link id.
 	if err = s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-		"payment_intent_id": pi.ID,
+		"payment_intent_id": link.PaymentLinkID,
 	}); err != nil {
-		log.Printf("order: failed to save payment_intent_id order=%d err=%v", orderID, err)
+		log.Printf("order: failed to save payment_link_id order=%d err=%v", orderID, err)
 	}
 
-	return pi, nil
+	return link, nil
 }
 
-func (s *orderService) HandleStripeEvent(payload []byte, signature string) error {
-	if s.stripeClient == nil {
+// HandlePayOSWebhook verifies a payOS webhook and, for a settled payment,
+// marks the order paid and publishes ORDER_PAID. The worker owns the
+// transition to confirmed (see internal/worker).
+func (s *orderService) HandlePayOSWebhook(payload []byte) error {
+	if s.payosClient == nil {
 		return errors.New("payment service not configured")
 	}
 
-	event, err := s.stripeClient.ValidateWebhook(payload, signature)
+	data, err := s.payosClient.VerifyWebhook(payload)
 	if err != nil {
 		return err
 	}
 
-	switch event.Type {
-	case "payment_intent.succeeded":
-		orderID, err := payment.ExtractOrderID(event)
-		if err != nil {
-			log.Printf("stripe webhook: %v", err)
-			return nil
-		}
-		if s.sqsClient != nil {
-			if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
-				EventType: queue.EventOrderPaid,
-				OrderID:   orderID,
-			}); sqsErr != nil {
-				log.Printf("stripe webhook: sqs publish failed order=%d err=%v", orderID, sqsErr)
-			}
-		}
-		return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-			"payment_status": domain.PaymentStatusPaid,
-		})
+	orderID := uint(data.OrderCode)
 
-	case "payment_intent.payment_failed":
-		orderID, err := payment.ExtractOrderID(event)
-		if err != nil {
-			return nil
-		}
-		return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-			"payment_status": domain.PaymentStatusFailed,
-		})
+	// Ignore webhooks for unknown orders (e.g. payOS's registration test ping)
+	// so they don't poison the queue.
+	order, err := s.orderRepo.FindOrderByID(orderID)
+	if err != nil {
+		log.Printf("payos webhook: unknown order=%d, ignoring", orderID)
+		return nil
 	}
 
+	// Guard against amount mismatch (under/overpayment) before crediting.
+	if data.Amount != int64(math.Round(order.TotalAmount)) {
+		log.Printf("payos webhook: amount mismatch order=%d got=%d want=%d, ignoring",
+			orderID, data.Amount, int64(math.Round(order.TotalAmount)))
+		return nil
+	}
+
+	// Persist paid first; only publish once the DB write succeeds, so a failed
+	// write makes payOS retry instead of leaving a published-but-unpaid order.
+	if err := s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+		"payment_status": domain.PaymentStatusPaid,
+	}); err != nil {
+		return err
+	}
+
+	if s.sqsClient != nil {
+		if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
+			EventType: queue.EventOrderPaid,
+			OrderID:   orderID,
+		}); sqsErr != nil {
+			log.Printf("payos webhook: sqs publish failed order=%d err=%v", orderID, sqsErr)
+		}
+	}
 	return nil
 }

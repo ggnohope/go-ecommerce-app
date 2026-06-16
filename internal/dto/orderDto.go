@@ -4,6 +4,6 @@ type PlaceOrderInput struct {
 	ShippingAddress string `json:"shipping_address"`
 }
 
-type CreatePaymentIntentInput struct {
+type CreatePaymentLinkInput struct {
 	OrderID uint `json:"order_id"`
 }

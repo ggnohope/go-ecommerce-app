@@ -1,6 +1,6 @@
 // @title           Go E-Commerce API
 // @version         1.0
-// @description     Production-grade e-commerce REST API built with Go, Fiber v2, GORM, and PostgreSQL. Backed by AWS SES/SNS for notifications, AWS S3 for image storage, AWS SQS for order event streaming, and Stripe for payments.
+// @description     Production-grade e-commerce REST API built with Go, Fiber v2, GORM, and PostgreSQL. Backed by AWS SES/SNS for notifications, AWS S3 for image storage, AWS SQS for order event streaming, and payOS for payments.
 // @host            localhost:8001
 // @BasePath        /
 // @securityDefinitions.apikey BearerAuth
