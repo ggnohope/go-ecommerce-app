@@ -1,10 +1,13 @@
-.PHONY: server build dev install-dev swagger migrate-up migrate-down migrate-status migrate-create seed
+.PHONY: server worker build dev install-dev swagger migrate-up migrate-down migrate-status migrate-create seed
 
 build:
 	go build -o bin/ecommerce main.go
 
 server:
 	APP_ENV=development go run main.go
+
+worker:
+	APP_ENV=development go run cmd/worker/main.go
 
 dev:
 	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; go install github.com/air-verse/air@latest; }
