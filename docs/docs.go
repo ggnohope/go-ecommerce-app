@@ -55,7 +55,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/orders/payment/intent": {
+        "/orders/payment/link": {
             "post": {
                 "security": [
                     {
@@ -71,7 +71,7 @@ const docTemplate = `{
                 "tags": [
                     "orders"
                 ],
-                "summary": "Create a Stripe payment intent for an order",
+                "summary": "Create a payOS payment link for an order",
                 "parameters": [
                     {
                         "description": "Order ID",
@@ -79,7 +79,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/dto.CreatePaymentIntentInput"
+                            "$ref": "#/definitions/dto.CreatePaymentLinkInput"
                         }
                     }
                 ],
@@ -113,7 +113,7 @@ const docTemplate = `{
         },
         "/orders/payment/webhook": {
             "post": {
-                "description": "Receives and processes Stripe payment events. Should only be called by Stripe.",
+                "description": "Receives and processes payOS payment events. Should only be called by payOS.",
                 "consumes": [
                     "application/json"
                 ],
@@ -123,16 +123,7 @@ const docTemplate = `{
                 "tags": [
                     "orders"
                 ],
-                "summary": "Stripe webhook receiver",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Stripe webhook signature",
-                        "name": "Stripe-Signature",
-                        "in": "header",
-                        "required": true
-                    }
-                ],
+                "summary": "payOS webhook receiver",
                 "responses": {
                     "200": {
                         "description": "OK"
@@ -2004,7 +1995,7 @@ const docTemplate = `{
                 }
             }
         },
-        "dto.CreatePaymentIntentInput": {
+        "dto.CreatePaymentLinkInput": {
             "type": "object",
             "properties": {
                 "order_id": {
@@ -2205,7 +2196,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "Go E-Commerce API",
-	Description:      "Production-grade e-commerce REST API built with Go, Fiber v2, GORM, and PostgreSQL. Backed by AWS SES/SNS for notifications, AWS S3 for image storage, AWS SQS for order event streaming, and Stripe for payments.",
+	Description:      "Production-grade e-commerce REST API built with Go, Fiber v2, GORM, and PostgreSQL. Backed by AWS SES/SNS for notifications, AWS S3 for image storage, AWS SQS for order event streaming, and payOS for payments.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",
