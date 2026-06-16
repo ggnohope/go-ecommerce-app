@@ -230,7 +230,7 @@
   <a href="#arch" class="active">1 · Kiến trúc tổng quan</a>
   <a href="#erd">2 · Sơ đồ quan hệ DB (ERD)</a>
   <a href="#flow-order">3 · Flow đặt hàng</a>
-  <a href="#flow-stripe">4 · Flow thanh toán Stripe</a>
+  <a href="#flow-payos">4 · Flow thanh toán payOS</a>
   <a href="#sqs">5 · AWS SQS lifecycle</a>
   <a href="#states">6 · State machine</a>
   <a href="#config">7 · Cấu hình &amp; setup</a>
@@ -245,8 +245,8 @@
 
   <div class="arch">
     <div class="arch-col">
-      <div class="node" data-c="browser"><div class="icon">🌐</div><b>Frontend / Browser</b><span>React + Stripe.js</span><span class="badge ext">CLIENT</span></div>
-      <div class="node" data-c="stripe"><div class="icon">💳</div><b>Stripe</b><span>Cổng thanh toán</span><span class="badge opt">OPTIONAL</span></div>
+      <div class="node" data-c="browser"><div class="icon">🌐</div><b>Frontend / Browser</b><span>React</span><span class="badge ext">CLIENT</span></div>
+      <div class="node" data-c="payos"><div class="icon">💳</div><b>payOS</b><span>Cổng thanh toán VietQR</span><span class="badge opt">OPTIONAL</span></div>
     </div>
     <div class="arch-col">
       <div class="node" data-c="api"><div class="icon">⚡</div><b>Go Fiber API :9000</b><span>handlers → services → repositories</span><span class="badge req">CORE</span></div>
@@ -254,7 +254,7 @@
     </div>
     <div class="arch-col">
       <div class="node" data-c="db"><div class="icon">🗄️</div><b>PostgreSQL</b><span>GORM — orders, carts, users…</span><span class="badge req">CORE</span></div>
-      <div class="node" data-c="consumer"><div class="icon">⚙️</div><b>Consumers</b><span>Email / Analytics / Shipping</span><span class="badge ext">EXTERNAL</span></div>
+      <div class="node" data-c="consumer"><div class="icon">⚙️</div><b>Worker (make worker)</b><span>internal/worker — SQS consumer</span><span class="badge req">CORE</span></div>
     </div>
   </div>
 
@@ -291,18 +291,18 @@
   <div class="player" id="player-order"></div>
 </section>
 
-<!-- ════════════════ 3. STRIPE FLOW ════════════════ -->
-<section id="flow-stripe">
-  <h2>4 · Flow thanh toán Stripe</h2>
-  <p class="sub">3 giai đoạn: <b style="color:var(--accent)">tạo PaymentIntent</b> (server) → <b style="color:var(--green)">nhập thẻ</b> (client ↔ Stripe, không qua server của bạn) → <b style="color:var(--orange)">webhook</b> (nguồn sự thật duy nhất).</p>
-  <div class="player" id="player-stripe"></div>
-  <div class="bug-box"><b>⚠ Bug tiềm ẩn:</b> trong <span class="file-ref">orderService.go:155</span>, webhook handler gọi <code class="inline">s.sqsClient.PublishOrderEvent(...)</code> <u>không check nil</u> (PlaceOrder thì có check). Nếu bật Stripe mà không cấu hình SQS → webhook đầu tiên sẽ <b>panic</b>.</div>
+<!-- ════════════════ 3. PAYOS FLOW ════════════════ -->
+<section id="flow-payos">
+  <h2>4 · Flow thanh toán payOS</h2>
+  <p class="sub">3 giai đoạn: <b style="color:var(--accent)">tạo payment link</b> (server gọi payOS) → <b style="color:var(--green)">khách trả tiền</b> (redirect tới <code class="inline">checkout_url</code> hoặc quét VietQR — chuyển khoản thẳng vào tài khoản merchant) → <b style="color:var(--orange)">webhook</b> (nguồn sự thật duy nhất).</p>
+  <div class="player" id="player-payos"></div>
+  <div class="warn-box" style="background:rgba(63,185,80,.08);border-color:rgba(63,185,80,.4)"><b style="color:var(--green)">✓ An toàn nil:</b> webhook handler <code class="inline">HandlePayOSWebhook</code> guard cả <code class="inline">if s.payosClient != nil</code> lẫn <code class="inline">if s.sqsClient != nil</code> trước khi dùng. Bật payOS mà không cấu hình SQS sẽ KHÔNG panic — sự kiện <code class="inline">ORDER_PAID</code> chỉ đơn giản không được publish.</div>
 </section>
 
 <!-- ════════════════ 4. SQS ════════════════ -->
 <section id="sqs">
   <h2>5 · AWS SQS — vòng đời một message</h2>
-  <p class="sub">SQS decouple API khỏi các tác vụ phụ trợ: API chỉ mất ~10ms để ném event rồi trả response; email/analytics/shipping xử lý sau, chậm hay chết cũng không ảnh hưởng việc đặt hàng. Click từng giai đoạn:</p>
+  <p class="sub">SQS decouple API khỏi các tác vụ phụ trợ: API chỉ mất ~10ms để ném event rồi trả response; worker (<span class="file-ref">internal/worker</span>) gửi email / xác nhận đơn sau, chậm hay chết cũng không ảnh hưởng việc đặt hàng. Click từng giai đoạn:</p>
 
   <div class="sqs-pipe">
     <div class="sqs-stage" data-s="0"><div class="ic">📤</div><b>1. SendMessage</b><span>Producer publish</span></div>
@@ -323,14 +323,14 @@
   </div>
 
   <h3>2 tính chất bắt buộc phải nhớ khi viết consumer</h3>
-  <p>① <b>At-least-once delivery</b> — message có thể được giao ≥ 1 lần → consumer phải <b>idempotent</b> (xử lý 2 lần cùng <code class="inline">order_id</code> không được gửi 2 email).<br>
+  <p>① <b>At-least-once delivery</b> — message có thể được giao ≥ 1 lần → consumer phải <b>idempotent</b>. Worker hiện tại: <code class="inline">handleOrderPaid</code> có guard <code class="inline">if order.Status == confirmed { skip }</code> nên không xác nhận / gửi email "đã nhận tiền" 2 lần. Riêng <code class="inline">handleOrderPlaced</code> KHÔNG guard — gửi trùng email xác nhận là trade-off lành tính được chấp nhận.<br>
   ② <b>Standard queue không đảm bảo thứ tự</b> — <code class="inline">ORDER_PAID</code> có thể đến trước <code class="inline">ORDER_PLACED</code>.</p>
 </section>
 
 <!-- ════════════════ 5. STATE MACHINE ════════════════ -->
 <section id="states">
   <h2>6 · State machine của Order</h2>
-  <p class="sub">Mỗi order có <b>2 trạng thái song song</b>: <code class="inline">Status</code> (vòng đời đơn) và <code class="inline">PaymentStatus</code> (vòng đời thanh toán) — định nghĩa tại <span class="file-ref">internal/domain/Order.go</span>. Cạnh <b style="color:var(--green)">xanh</b> = đã hiện thực trong code, cạnh xám = đã khai báo hằng số nhưng chưa có endpoint nào chuyển tới. Click vào cạnh xanh để xem code kích hoạt.</p>
+  <p class="sub">Mỗi order có <b>2 trạng thái song song</b>: <code class="inline">Status</code> (vòng đời đơn) và <code class="inline">PaymentStatus</code> (vòng đời thanh toán) — định nghĩa tại <span class="file-ref">internal/domain/Order.go</span>. Cạnh <b style="color:var(--green)">xanh</b> = đã hiện thực trong code, cạnh xám = đã khai báo hằng số nhưng chưa có endpoint nào chuyển tới. Lưu ý phân vai: webhook payOS chỉ set <code class="inline">payment_status=paid</code>; chính <b>worker</b> mới chuyển <code class="inline">Status</code> sang <code class="inline">confirmed</code>. Click vào cạnh xanh để xem code kích hoạt.</p>
 
   <div class="sm-wrap">
     <div class="sm-svg-box">
@@ -347,7 +347,7 @@
         <rect class="st" x="320" y="130" width="96" height="34" rx="8"/><text x="368" y="152" text-anchor="middle">delivered</text>
         <rect class="st" x="10"  y="130" width="96" height="34" rx="8"/><text x="58" y="152" text-anchor="middle">cancelled</text>
         <path class="edge impl" d="M102,57 L158,57" data-e="confirm"/>
-        <text class="elabel impl" x="106" y="50">webhook ✓</text>
+        <text class="elabel impl" x="104" y="50">worker ORDER_PAID</text>
         <path class="edge" d="M260,57 L318,57"/>
         <path class="edge" d="M364,74 L366,128"/>
         <path class="edge" d="M56,74 L57,128"/>
@@ -362,9 +362,9 @@
         <rect class="st impl" x="200" y="90" width="78" height="34" rx="8"/><text x="239" y="112" text-anchor="middle">failed</text>
         <rect class="st" x="360" y="14" width="100" height="34" rx="8"/><text x="410" y="36" text-anchor="middle">refunded</text>
         <path class="edge impl" d="M102,52 C140,45 160,38 198,32" data-e="paid"/>
-        <text class="elabel impl" x="112" y="32">succeeded</text>
+        <text class="elabel impl" x="112" y="32">webhook success</text>
         <path class="edge impl" d="M102,64 C140,72 160,80 198,98" data-e="failed"/>
-        <text class="elabel impl" x="118" y="95">payment_failed</text>
+        <text class="elabel impl" x="120" y="95">webhook fail</text>
         <path class="edge" d="M272,31 L358,31"/>
         <text class="elabel" x="284" y="24">(chưa hiện thực)</text>
         <path class="edge impl" d="M239,90 C220,76 150,68 104,60" data-e="retry"/>
@@ -390,8 +390,11 @@
     <tr><td><code>AWS_SES_FROM_EMAIL</code></td><td><span class="tag req">REQUIRED</span></td><td>Email gửi thông báo (SES)</td><td>App không khởi động</td></tr>
     <tr><td><code>AWS_S3_BUCKET</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Bucket ảnh sản phẩm</td><td>⚠ image uploads disabled</td></tr>
     <tr><td><code>AWS_SQS_ORDER_QUEUE_URL</code></td><td><span class="tag opt">OPTIONAL</span></td><td>URL queue order events</td><td>⚠ order events disabled</td></tr>
-    <tr><td><code>STRIPE_SECRET_KEY</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Secret key Stripe (<code>sk_test_…</code>)</td><td>⚠ payment intents disabled</td></tr>
-    <tr><td><code>STRIPE_WEBHOOK_SECRET</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Secret verify chữ ký webhook (<code>whsec_…</code>)</td><td>Webhook validation fail</td></tr>
+    <tr><td><code>PAYOS_CLIENT_ID</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Client ID merchant payOS</td><td>⚠ payment links disabled (trống = tắt payOS)</td></tr>
+    <tr><td><code>PAYOS_API_KEY</code></td><td><span class="tag opt">OPTIONAL</span></td><td>API key payOS (gửi kèm header request)</td><td>⚠ payment links disabled</td></tr>
+    <tr><td><code>PAYOS_CHECKSUM_KEY</code></td><td><span class="tag opt">OPTIONAL</span></td><td>Key ký/verify chữ ký HMAC-SHA256 (request + webhook)</td><td>Tạo link / verify webhook fail</td></tr>
+    <tr><td><code>PAYOS_RETURN_URL</code></td><td><span class="tag opt">OPTIONAL</span></td><td>URL redirect khi khách trả tiền xong</td><td>Dùng URL mặc định của payOS</td></tr>
+    <tr><td><code>PAYOS_CANCEL_URL</code></td><td><span class="tag opt">OPTIONAL</span></td><td>URL redirect khi khách huỷ thanh toán</td><td>Dùng URL mặc định của payOS</td></tr>
   </table>
 
   <h3>File .env mẫu (development)</h3>
@@ -405,8 +408,11 @@ AWS_SES_FROM_EMAIL=no-reply@yourshop.com
 AWS_S3_BUCKET=my-ecommerce-product-images
 AWS_SQS_ORDER_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/123456789012/order-events
 
-STRIPE_SECRET_KEY=sk_test_xxxxxxxxxxxxx
-STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxx</pre>
+PAYOS_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+PAYOS_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+PAYOS_CHECKSUM_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+PAYOS_RETURN_URL=https://yourshop.com/payment/success
+PAYOS_CANCEL_URL=https://yourshop.com/payment/cancel</pre>
 
   <h3>Setup SQS queue (kèm Dead Letter Queue)</h3>
   <pre class="code"><span class="c"># 1. Tạo DLQ trước</span>
@@ -426,26 +432,38 @@ aws sqs create-queue --queue-name order-events --attributes '{
 <span class="c"># Xem message trong queue (debug)</span>
 aws sqs receive-message --queue-url $QUEUE_URL --max-number-of-messages 10</pre>
 
-  <h3>Test Stripe webhook ở localhost (Stripe CLI)</h3>
-  <pre class="code"><span class="c"># 1. Đăng nhập + forward webhook về local — lệnh này in ra whsec_… </span>
-<span class="c">#    → copy vào STRIPE_WEBHOOK_SECRET rồi restart server</span>
-stripe login
-stripe listen --forward-to localhost:9000/orders/payment/webhook
+  <h3>Chạy worker (SQS consumer)</h3>
+  <pre class="code"><span class="c"># API server</span>
+make run        <span class="c"># cmd/main.go — Go Fiber API :9000</span>
 
-<span class="c"># 2. Ở terminal khác: giả lập thanh toán thành công</span>
-stripe trigger payment_intent.succeeded
+<span class="c"># Worker: long-poll SQS, gửi email + xác nhận đơn</span>
+make worker     <span class="c"># cmd/worker/main.go — internal/worker</span>
 
-<span class="c"># 3. Test thẻ thật trong UI: dùng số thẻ test của Stripe</span>
-<span class="c">#    4242 4242 4242 4242  — luôn thành công</span>
-<span class="c">#    4000 0000 0000 0002  — luôn bị từ chối (decline)</span></pre>
+<span class="c"># Worker dispatch theo event_type:</span>
+<span class="c">#   ORDER_PLACED -> email xác nhận (không guard idempotency)</span>
+<span class="c">#   ORDER_PAID   -> status=confirmed + email "đã nhận tiền"</span>
+<span class="c">#                   (guard: if order.Status == confirmed { skip })</span></pre>
 
-  <div class="warn-box"><b>Lưu ý thứ tự bật service:</b> nếu bật <code class="inline">STRIPE_SECRET_KEY</code> thì <u>nên bật luôn</u> <code class="inline">AWS_SQS_ORDER_QUEUE_URL</code> (hoặc fix nil-check ở <span class="file-ref">orderService.go:155</span>) để tránh panic khi webhook <code class="inline">payment_intent.succeeded</code> bắn về.</div>
+  <h3>Test payOS webhook ở localhost</h3>
+  <pre class="code"><span class="c"># payOS gọi webhook qua HTTPS công khai → dùng tunnel để forward về local</span>
+ngrok http 9000
+<span class="c"># Khai báo URL webhook trong payOS Dashboard:</span>
+<span class="c">#   https://&lt;ngrok-id&gt;.ngrok.io/orders/payment/webhook</span>
+
+<span class="c"># Body webhook payOS (rút gọn) — server verify signature bằng PAYOS_CHECKSUM_KEY:</span>
+<span class="c"># {"code":"00","desc":"success","success":true,</span>
+<span class="c">#  "data":{"orderCode":5,"amount":1000,...},"signature":"&lt;hmac-sha256&gt;"}</span>
+
+<span class="c"># Thanh toán thật: quét VietQR hoặc mở checkout_url, chuyển khoản</span>
+<span class="c"># → tiền vào thẳng tài khoản ngân hàng merchant, không có dữ liệu thẻ</span></pre>
+
+  <div class="warn-box" style="background:rgba(63,185,80,.08);border-color:rgba(63,185,80,.4)"><b style="color:var(--green)">✓ Bật service độc lập an toàn:</b> payOS và SQS đều được nil-check trong <span class="file-ref">orderService.go</span> (<code class="inline">HandlePayOSWebhook</code> guard <code class="inline">s.payosClient != nil</code> và <code class="inline">s.sqsClient != nil</code>). Bật cái này mà không bật cái kia sẽ KHÔNG panic — tính năng tương ứng chỉ đơn giản bị tắt.</div>
 
   <h3>Các điểm cải thiện đáng làm tiếp</h3>
   <p>① Bọc <b>transaction</b> quanh CreateOrder + ClearCart (hiện là 2 thao tác rời — app chết giữa chừng thì cart còn nguyên dù đơn đã tạo).<br>
   ② <b>Trừ tồn kho</b> khi đặt hàng — PlaceOrder hiện không kiểm tra/giảm <code class="inline">stock</code>.<br>
-  ③ Lưu tiền dạng <b>cents (int64)</b> thay vì <code class="inline">float64</code> — khớp với cách Stripe tính.<br>
-  ④ Chống <b>replay webhook</b>: check <code class="inline">payment_status == paid</code> trước khi publish lại <code class="inline">ORDER_PAID</code> lên SQS.</p>
+  ③ Lưu tiền dạng <b>số nguyên</b> thay vì <code class="inline">float64</code>. payOS dùng VND nguyên (<code class="inline">amount = round(TotalAmount)</code>), không phải cents — nên dùng <code class="inline">int64</code> VND để tránh sai số dấu phẩy động.<br>
+  ④ Chống <b>replay webhook</b> đã được xử lý ở worker: <code class="inline">handleOrderPaid</code> guard <code class="inline">if order.Status == confirmed { skip }</code> nên xác nhận / gửi email "đã nhận tiền" 2 lần là an toàn (idempotent).</p>
 </section>
 
 </main>
@@ -464,12 +482,12 @@ function hl(src){ // very light Go/JS/JSON highlighter
 
 /* ═══════════ 1. architecture detail panel ═══════════ */
 const ARCH = {
-  browser: {t:'🌐 Frontend / Browser', d:'Client gọi REST API kèm JWT Bearer token. Riêng bước nhập thẻ, trình duyệt nói chuyện TRỰC TIẾP với Stripe qua Stripe.js — số thẻ không bao giờ chạm server của bạn (giảm gánh nặng PCI-DSS).', li:['Đăng nhập → nhận access token (15 phút) + refresh token (7 ngày)','Gọi POST /user/me/order để đặt hàng','Gọi stripe.confirmCardPayment(client_secret) để trả tiền']},
-  api: {t:'⚡ Go Fiber API (:9000)', d:'Core của hệ thống, kiến trúc 3 layer:', li:['<b>Handlers</b> — parse request, check auth → <span class="file-ref">internal/api/rest/handlers/</span>','<b>Services</b> — business logic → <span class="file-ref">internal/service/orderService.go</span>','<b>Repositories</b> — truy cập DB qua GORM → <span class="file-ref">internal/repository/</span>','Stripe &amp; SQS client được inject vào orderService lúc khởi động (<span class="file-ref">configs/appConfig.go</span>); nếu thiếu env var thì = nil và tính năng tương ứng tắt']},
-  db: {t:'🗄️ PostgreSQL (GORM)', d:'Lưu toàn bộ trạng thái: users, products, carts, orders, order_items, refresh_tokens. Bảng orders có 2 cột trạng thái song song:', li:['<code>status</code>: pending → confirmed → shipped → delivered / cancelled','<code>payment_status</code>: pending → paid / failed → refunded','<code>payment_intent_id</code>: nối đơn hàng với PaymentIntent bên Stripe']},
-  stripe: {t:'💳 Stripe', d:'Cổng thanh toán. Mô hình PaymentIntent: server tạo intent với số tiền lấy từ DB (chống sửa giá), client xác nhận thẻ, Stripe bắn webhook về làm nguồn sự thật.', li:['<span class="file-ref">pkg/payment/stripe.go</span> — CreatePaymentIntent, ValidateWebhook, ExtractOrderID','metadata.order_id là "sợi chỉ" nối Stripe quay về đơn hàng','Webhook được verify chữ ký HMAC-SHA256 → không cần JWT']},
-  sqs: {t:'📨 AWS SQS', d:'Hàng đợi sự kiện ORDER_PLACED / ORDER_PAID / ORDER_SHIPPED. Producer là app này; consumer là các service khác (chưa nằm trong repo).', li:['<span class="file-ref">pkg/queue/sqs.go</span> — PublishOrderEvent','Message = JSON body + MessageAttribute event_type (lọc không cần parse body)','Publish lỗi chỉ log warning — KHÔNG làm fail request đặt hàng']},
-  consumer: {t:'⚙️ Consumers (ngoài repo)', d:'Bất kỳ service nào poll queue: gửi email xác nhận, ghi analytics, tạo đơn vận chuyển… Phải tuân thủ 2 luật của SQS:', li:['Idempotent — message có thể được giao nhiều lần','Không dựa vào thứ tự — standard queue không FIFO']},
+  browser: {t:'🌐 Frontend / Browser', d:'Client gọi REST API kèm JWT Bearer token. Khi thanh toán, client redirect khách sang trang checkout của payOS (hoặc render mã VietQR) — khách chuyển khoản ngân hàng, không có dữ liệu thẻ chạm server và không cần SDK thanh toán phía client.', li:['Đăng nhập → nhận access token (15 phút) + refresh token (7 ngày)','Gọi POST /user/me/order để đặt hàng','Gọi POST /orders/payment/link → redirect tới checkout_url / hiển thị qr_code']},
+  api: {t:'⚡ Go Fiber API (:9000)', d:'Core của hệ thống, kiến trúc 3 layer:', li:['<b>Handlers</b> — parse request, check auth → <span class="file-ref">internal/api/rest/handlers/</span>','<b>Services</b> — business logic → <span class="file-ref">internal/service/orderService.go</span>','<b>Repositories</b> — truy cập DB qua GORM → <span class="file-ref">internal/repository/</span>','payOS &amp; SQS client được inject vào orderService lúc khởi động (<span class="file-ref">configs/appConfig.go</span>); nếu thiếu env var thì = nil và tính năng tương ứng tắt (có nil-check, không panic)']},
+  db: {t:'🗄️ PostgreSQL (GORM)', d:'Lưu toàn bộ trạng thái: users, products, carts, orders, order_items, refresh_tokens. Bảng orders có 2 cột trạng thái song song:', li:['<code>status</code>: pending → confirmed → shipped → delivered / cancelled (worker chuyển sang confirmed)','<code>payment_status</code>: pending → paid / failed → refunded (webhook payOS set paid)','<code>payment_link_id</code>: nối đơn hàng với payment link bên payOS']},
+  payos: {t:'💳 payOS', d:'Cổng thanh toán VietQR (Việt Nam): account-to-account, tiền vào thẳng tài khoản ngân hàng merchant. Server tạo payment link với số tiền lấy từ DB (chống sửa giá), khách trả qua QR / chuyển khoản, payOS bắn webhook về làm nguồn sự thật.', li:['Tạo link qua API <code>https://api-merchant.payos.vn/v2/payment-requests</code>, request ký HMAC-SHA256','Trả về checkout_url + qr_code (VietQR) + payment_link_id','Webhook verify chữ ký HMAC-SHA256 (key = checksum key) → không cần JWT']},
+  sqs: {t:'📨 AWS SQS', d:'Hàng đợi sự kiện ORDER_PLACED / ORDER_PAID. Producer là API; consumer là worker trong repo (<span class="file-ref">internal/worker</span>).', li:['<span class="file-ref">pkg/queue/sqs.go</span> — PublishOrderEvent','Message = JSON body + MessageAttribute event_type (lọc không cần parse body)','Publish lỗi chỉ log warning — KHÔNG làm fail request đặt hàng']},
+  consumer: {t:'⚙️ Worker (make worker)', d:'Worker Go thật trong repo: <span class="file-ref">cmd/worker/main.go</span> + <span class="file-ref">internal/worker/</span>. Long-poll SQS rồi dispatch theo event_type, tuân thủ 2 luật của SQS:', li:['<code>ORDER_PLACED</code> → gửi email xác nhận (không guard — gửi trùng là trade-off lành tính)','<code>ORDER_PAID</code> → status=confirmed + email "đã nhận tiền", guard <code>if order.Status == confirmed { skip }</code> (idempotent)','Không dựa vào thứ tự — standard queue không FIFO']},
 };
 document.querySelectorAll('.node').forEach(n=>{
   n.onclick=()=>{
@@ -627,7 +645,7 @@ for _, item := range cart.Items {
 	}
 }`},
  {from:1,to:0,kind:'ret',label:'201 Created {order}',title:'Trả response cho client',
-  desc:'Client nhận về order đầy đủ (id, items, total_amount, status=pending). Bước tiếp theo của client: gọi tạo PaymentIntent để thanh toán → xem Flow 3.',
+  desc:'Client nhận về order đầy đủ (id, items, total_amount, status=pending). Bước tiếp theo của client: gọi tạo payment link để thanh toán → xem Flow 4.',
   file:'internal/api/rest/handlers/userHandler.go:481',
   code:`return response.Created(ctx, order)
 
@@ -643,24 +661,24 @@ for _, item := range cart.Items {
 }`},
 ]);
 
-/* ═══════════ 3. stripe flow data ═══════════ */
-const A_STRIPE=[{ic:'🌐',name:'Browser'},{ic:'⚡',name:'API'},{ic:'🗄️',name:'PostgreSQL'},{ic:'💳',name:'Stripe'},{ic:'📨',name:'SQS'}];
-const PH1={phase:'Giai đoạn 1 — Tạo PaymentIntent (server-side)',phaseBg:'rgba(88,166,255,.12)',phaseColor:'#58a6ff'};
-const PH2={phase:'Giai đoạn 2 — Nhập thẻ (client ↔ Stripe)',phaseBg:'rgba(63,185,80,.12)',phaseColor:'#3fb950'};
+/* ═══════════ 3. payOS flow data ═══════════ */
+const A_PAYOS=[{ic:'🌐',name:'Browser'},{ic:'⚡',name:'API'},{ic:'🗄️',name:'PostgreSQL'},{ic:'💳',name:'payOS'},{ic:'📨',name:'SQS'}];
+const PH1={phase:'Giai đoạn 1 — Tạo payment link (server-side)',phaseBg:'rgba(88,166,255,.12)',phaseColor:'#58a6ff'};
+const PH2={phase:'Giai đoạn 2 — Khách trả tiền (client ↔ payOS)',phaseBg:'rgba(63,185,80,.12)',phaseColor:'#3fb950'};
 const PH3={phase:'Giai đoạn 3 — Webhook (nguồn sự thật)',phaseBg:'rgba(210,153,34,.12)',phaseColor:'#d29922'};
-buildPlayer('player-stripe', A_STRIPE, [
- {...PH1,from:0,to:1,label:'POST /orders/payment/intent {order_id}',title:'Client xin tạo PaymentIntent',
-  desc:'Client CHỈ gửi order_id. Số tiền do server tự tra từ DB — user không bao giờ được tự khai số tiền (chống gian lận sửa giá).',
+buildPlayer('player-payos', A_PAYOS, [
+ {...PH1,from:0,to:1,label:'POST /orders/payment/link {order_id}',title:'Client xin tạo payment link',
+  desc:'Client CHỈ gửi order_id (kèm JWT). Số tiền do server tự tra từ DB — user không bao giờ được tự khai số tiền (chống gian lận sửa giá).',
   file:'internal/api/rest/handlers/orderHandler.go:29',
-  code:`func (h *OrderHandler) CreatePaymentIntent(ctx *fiber.Ctx) error {
+  code:`func (h *OrderHandler) CreatePaymentLink(ctx *fiber.Ctx) error {
 	user, _ := ctx.Locals("user").(domain.User)
-	var input dto.CreatePaymentIntentInput
+	var input dto.CreatePaymentLinkInput
 	if err := ctx.BodyParser(&input); err != nil || input.OrderID == 0 {
 		return response.BadRequest(ctx, "order_id is required")
 	}
-	pi, err := h.svc.CreatePaymentIntent(input.OrderID, user.ID)
+	link, err := h.svc.CreatePaymentLink(input.OrderID, user.ID)
 	...
-	return response.OK(ctx, pi)
+	return response.OK(ctx, link)
 }`},
  {from:1,to:2,label:'tra order + 3 guard',title:'Kiểm tra: tồn tại / đúng chủ / chưa trả tiền',
   desc:'3 guard liên tiếp: order tồn tại, thuộc về user đang đăng nhập (chống IDOR — trả "not found" thay vì "forbidden" để không lộ thông tin), và chưa paid.',
@@ -675,148 +693,138 @@ if order.UserID != userID {
 if order.PaymentStatus == domain.PaymentStatusPaid {
 	return nil, errors.New("order is already paid")
 }`},
- {from:1,to:3,label:'PaymentIntent.New(amount, metadata)',title:'Gọi Stripe API tạo intent',
-  desc:'Tiền đổi sang CENTS (Stripe chỉ nhận số nguyên). metadata.order_id là "sợi chỉ" — sau này webhook bắn về, server đọc lại field này để biết đơn nào được trả tiền.',
-  file:'pkg/payment/stripe.go:29',
-  code:`amountCents := int64(math.Round(order.TotalAmount * 100))
+ {from:1,to:3,label:'POST /v2/payment-requests (HMAC)',title:'Gọi payOS API tạo payment link',
+  desc:'Tiền là VND nguyên (amount = round(TotalAmount)), KHÔNG phải cents. Request được ký HMAC-SHA256 bằng checksum key. orderCode = order ID — "sợi chỉ" để webhook sau này biết đơn nào được trả tiền.',
+  file:'pkg/payment/payos.go:29',
+  code:`amount := int64(math.Round(order.TotalAmount)) // VND nguyên
 
-params := &stripe.PaymentIntentParams{
-	Amount:   stripe.Int64(amountCents), // 1000.00 USD -> 100000
-	Currency: stripe.String("usd"),
-	Metadata: map[string]string{
-		"order_id": fmt.Sprintf("%d", orderID), // sợi chỉ nối về đơn
-	},
+body := payos.CreateLinkRequest{
+	OrderCode:   int64(orderID), // sợi chỉ nối về đơn
+	Amount:      amount,
+	Description: fmt.Sprintf("Order #%d", orderID),
+	ReturnUrl:   s.returnURL,
+	CancelUrl:   s.cancelURL,
 }
-pi, err := paymentintent.New(params)`},
- {from:3,to:1,kind:'ret',label:'pi_xxx + client_secret',title:'Stripe trả về intent',
-  desc:'client_secret là token một-lần cho phép RIÊNG phiên trình duyệt này hoàn tất thanh toán cho intent này. Không phải secret key của bạn — đưa cho client an toàn.',
-  code:`// Stripe response (rút gọn):
+body.Signature = signHMAC(body, s.checksumKey) // HMAC-SHA256
+// POST https://api-merchant.payos.vn/v2/payment-requests
+//   headers: x-client-id, x-api-key`},
+ {from:3,to:1,kind:'ret',label:'checkout_url + qr_code',title:'payOS trả về payment link',
+  desc:'payOS trả checkout_url (trang thanh toán hosted), qr_code (chuỗi VietQR để render mã QR), và payment_link_id. Không có dữ liệu thẻ — đây là chuyển khoản account-to-account.',
+  code:`// payOS response (rút gọn):
 {
-  "id": "pi_3OqK8w2eZvKYlo2C1gFJqXmZ",
-  "client_secret": "pi_3OqK8w..._secret_kY9mP2...",
-  "amount": 100000,
-  "currency": "usd",
-  "status": "requires_payment_method"
-}`},
- {from:1,to:2,label:'UPDATE payment_intent_id',title:'Lưu liên kết intent ↔ order vào DB',
-  desc:'Để sau này tra cứu/đối soát được đơn nào gắn với intent nào ở phía Stripe Dashboard.',
-  file:'internal/service/orderService.go:129',
-  code:`if err = s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-	"payment_intent_id": pi.ID,
-}); err != nil {
-	log.Printf("order: failed to save payment_intent_id ...")
-}`},
- {from:1,to:0,kind:'ret',label:'{client_secret}',title:'Trả client_secret cho trình duyệt',
-  desc:'Server xong nhiệm vụ giai đoạn 1. Từ đây trình duyệt nói chuyện trực tiếp với Stripe.',
-  code:`{
+  "code": "00",
   "data": {
-    "id": "pi_3OqK8w...",
-    "client_secret": "pi_3OqK8w..._secret_kY9mP2...",
-    "amount": 100000,
-    "currency": "usd",
-    "status": "requires_payment_method"
+    "paymentLinkId": "abc123...",
+    "checkoutUrl": "https://pay.payos.vn/web/abc123...",
+    "qrCode": "00020101021238...VND...6304XXXX",
+    "amount": 1000,
+    "orderCode": 5
   }
 }`},
- {...PH2,from:0,to:3,label:'confirmCardPayment(secret, card)',title:'Trình duyệt gửi thẻ THẲNG cho Stripe',
-  desc:'Số thẻ không bao giờ chạm server của bạn → bạn không phải tuân thủ PCI-DSS mức cao. Đây là code frontend (ví dụ với Stripe.js).',
-  file:'frontend (ví dụ Stripe.js)',
-  code:`// Frontend — ví dụ
-const stripe = Stripe("pk_test_..."); // PUBLISHABLE key
-
-const { error, paymentIntent } = await stripe.confirmCardPayment(
-  clientSecret,            // từ bước trước
-  { payment_method: { card: cardElement } }
-);
-
-if (paymentIntent?.status === "succeeded") {
-  // CHỈ để hiển thị UI "đang xử lý..."
-  // KHÔNG tự đánh dấu đơn là paid — chờ webhook!
+ {from:1,to:2,label:'UPDATE payment_link_id',title:'Lưu liên kết payment link ↔ order vào DB',
+  desc:'Để sau này tra cứu/đối soát được đơn nào gắn với payment link nào ở phía payOS Dashboard.',
+  file:'internal/service/orderService.go:129',
+  code:`if err = s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
+	"payment_link_id": link.PaymentLinkID,
+}); err != nil {
+	log.Printf("order: failed to save payment_link_id ...")
 }`},
- {from:3,to:0,kind:'ret',label:'kết quả (chỉ để hiện UI)',title:'Stripe báo kết quả cho trình duyệt',
-  desc:'⚠ KHÔNG TIN kết quả này để cập nhật đơn — user có thể tắt tab, mạng rớt, hoặc giả mạo. Nguồn sự thật duy nhất là webhook ở giai đoạn 3.',
+ {from:1,to:0,kind:'ret',label:'{checkout_url, qr_code}',title:'Trả link thanh toán cho trình duyệt',
+  desc:'Server xong nhiệm vụ giai đoạn 1. Từ đây client redirect khách sang checkout_url hoặc render VietQR từ qr_code.',
+  code:`{
+  "data": {
+    "payment_link_id": "abc123...",
+    "checkout_url": "https://pay.payos.vn/web/abc123...",
+    "qr_code": "00020101021238...VND...6304XXXX",
+    "amount": 1000
+  }
+}`},
+ {...PH2,from:0,to:3,label:'redirect checkout_url / quét VietQR',title:'Khách trả tiền THẲNG qua payOS',
+  desc:'Client redirect khách sang checkout_url (hoặc render qr_code thành mã QR). Khách chuyển khoản ngân hàng / quét VietQR — tiền vào THẲNG tài khoản merchant. Không có dữ liệu thẻ chạm server của bạn, không cần SDK thanh toán phía client.',
+  file:'frontend',
+  code:`// Frontend — ví dụ
+// Cách 1: redirect sang trang hosted của payOS
+window.location.href = res.data.checkout_url;
+
+// Cách 2: render VietQR ngay trong app
+renderQRCode(res.data.qr_code); // khách mở app ngân hàng quét
+
+// KHÔNG tự đánh dấu đơn là paid khi quay về return_url
+// -> chờ webhook (nguồn sự thật)`},
+ {from:3,to:0,kind:'ret',label:'redirect về return_url (chỉ để hiện UI)',title:'payOS đưa khách về return_url',
+  desc:'⚠ KHÔNG TIN việc khách quay về return_url để cập nhật đơn — khách có thể tắt tab, mạng rớt, hoặc tự gọi URL đó. Nguồn sự thật duy nhất là webhook ở giai đoạn 3.',
   code:`// Vì sao không tin client?
-// 1. User tắt tab ngay sau khi trả tiền -> server không bao giờ biết
+// 1. Khách tắt tab ngay sau khi chuyển khoản -> server không biết
 // 2. Mạng rớt giữa chừng
-// 3. User có thể giả mạo request "tôi đã trả tiền rồi"
+// 3. Khách có thể tự mở return_url mà chưa trả tiền
 //
-// => Đơn CHỈ được đánh dấu paid khi Stripe chủ động
+// => Đơn CHỈ được đánh dấu paid khi payOS chủ động
 //    gọi webhook có chữ ký hợp lệ (giai đoạn 3)`},
- {...PH3,from:3,to:1,label:'POST /webhook + Stripe-Signature',title:'Stripe chủ động bắn webhook về server',
-  desc:'Route công khai duy nhất không cần JWT — bảo vệ bằng chữ ký HMAC thay vì token. Stripe sẽ retry nếu server không trả 2xx.',
+ {...PH3,from:3,to:1,label:'POST /orders/payment/webhook',title:'payOS chủ động bắn webhook về server',
+  desc:'Route công khai duy nhất không cần JWT — bảo vệ bằng chữ ký HMAC thay vì token. payOS sẽ retry nếu server không trả 2xx.',
   file:'internal/api/rest/handlers/orderHandler.go:62',
-  code:`// route: orders.Post("/payment/webhook", h.StripeWebhook)
+  code:`// route: orders.Post("/payment/webhook", h.PayOSWebhook)
 //        ^ KHÔNG có middleware Authorize
 
-func (h *OrderHandler) StripeWebhook(ctx *fiber.Ctx) error {
-	signature := ctx.Get("Stripe-Signature")
-	if err := h.svc.HandleStripeEvent(ctx.Body(), signature); err != nil {
+func (h *OrderHandler) PayOSWebhook(ctx *fiber.Ctx) error {
+	var payload payos.WebhookPayload
+	if err := ctx.BodyParser(&payload); err != nil {
+		return response.BadRequest(ctx, "invalid body")
+	}
+	if err := h.svc.HandlePayOSWebhook(payload); err != nil {
 		return response.BadRequest(ctx, err.Error())
 	}
 	return ctx.SendStatus(fiber.StatusOK)
 }`},
  {from:1,to:1,label:'verify HMAC signature',title:'Xác thực chữ ký webhook',
-  desc:'webhook.ConstructEvent verify HMAC-SHA256 trong header bằng STRIPE_WEBHOOK_SECRET. Không có secret → không thể giả mạo webhook kể cả khi biết URL. Cũng chống replay (check timestamp).',
-  file:'pkg/payment/stripe.go:50',
-  code:`func (s *StripeClient) ValidateWebhook(payload []byte, signature string)
-	(stripe.Event, error) {
-
-	event, err := webhook.ConstructEvent(
-		payload,          // raw body (KHÔNG parse trước!)
-		signature,        // header Stripe-Signature
-		s.webhookSecret,  // whsec_... từ env
-	)
-	if err != nil {
-		return stripe.Event{}, fmt.Errorf("validation failed: %w", err)
+  desc:'Ký lại HMAC-SHA256 trên các field trong data đã sắp xếp THEO ALPHABET, key = checksum key, so với payload.signature. Không có checksum key → không thể giả mạo webhook kể cả khi biết URL.',
+  file:'pkg/payment/payos.go:50',
+  code:`func (c *PayOSClient) VerifyWebhook(p WebhookPayload) error {
+	// nối "key=value&..." các field của data, sort alphabet
+	raw := buildSortedData(p.Data)
+	mac := hmac.New(sha256.New, []byte(c.checksumKey))
+	mac.Write([]byte(raw))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(expected), []byte(p.Signature)) {
+		return fmt.Errorf("invalid webhook signature")
 	}
-	return event, nil
+	return nil
 }`},
- {from:1,to:1,label:'ExtractOrderID(metadata)',title:'Đọc lại order_id từ metadata',
-  desc:'"Sợi chỉ" được nhét vào ở giai đoạn 1 giờ được kéo ra: parse event JSON → lấy metadata.order_id → biết đơn nào vừa được trả tiền.',
-  file:'pkg/payment/stripe.go:59',
-  code:`func ExtractOrderID(event stripe.Event) (uint, error) {
-	var pi stripe.PaymentIntent
-	if err := json.Unmarshal(event.Data.Raw, &pi); err != nil { ... }
-
-	idStr, ok := pi.Metadata["order_id"]
-	if !ok || idStr == "" {
-		return 0, fmt.Errorf("order_id missing from metadata")
-	}
-	var id uint
-	fmt.Sscanf(idStr, "%d", &id)
-	return id, nil
+ {from:1,to:2,label:'check order tồn tại + đúng amount',title:'Đối chiếu đơn và số tiền',
+  desc:'"Sợi chỉ" orderCode được kéo ra → tra order. Kiểm tra order tồn tại và amount trong webhook KHỚP với TotalAmount trong DB trước khi đánh dấu paid.',
+  file:'internal/service/orderService.go:148',
+  code:`orderID := uint(p.Data.OrderCode)
+order, err := s.orderRepo.FindOrderByID(orderID)
+if err != nil {
+	return errors.New("order not found")
+}
+if int64(math.Round(order.TotalAmount)) != p.Data.Amount {
+	return errors.New("amount mismatch")
 }`},
- {from:1,to:4,label:'publish ORDER_PAID',title:'Bắn sự kiện ORDER_PAID lên SQS',
-  desc:'⚠ Đây là chỗ có bug tiềm ẩn: KHÔNG check s.sqsClient != nil như bên PlaceOrder. Stripe bật + SQS tắt → panic.',
+ {from:1,to:4,label:'publish ORDER_PAID (nil-check)',title:'Bắn sự kiện ORDER_PAID lên SQS',
+  desc:'✓ ĐÃ check s.sqsClient != nil (giống PlaceOrder) — bật payOS mà tắt SQS sẽ KHÔNG panic, event chỉ không được publish. Lưu ý: API webhook KHÔNG set status=confirmed — worker mới làm việc đó.',
   file:'internal/service/orderService.go:155',
-  code:`case "payment_intent.succeeded":
-	orderID, err := payment.ExtractOrderID(event)
-	...
-	// ⚠ thiếu: if s.sqsClient != nil
+  code:`if s.sqsClient != nil {
 	if sqsErr := s.sqsClient.PublishOrderEvent(queue.OrderEvent{
 		EventType: queue.EventOrderPaid, // "ORDER_PAID"
 		OrderID:   orderID,
 	}); sqsErr != nil {
-		log.Printf("stripe webhook: sqs publish failed ...")
-	}`},
- {from:1,to:2,label:'UPDATE paid + confirmed',title:'Cập nhật trạng thái cuối cùng',
-  desc:'payment_status=paid VÀ status=confirmed cùng lúc — đơn chính thức được xác nhận. Nếu là payment_intent.payment_failed thì chỉ set payment_status=failed (user có thể thử trả lại).',
+		log.Printf("payos webhook: sqs publish failed ...")
+	}
+}`},
+ {from:1,to:2,label:'UPDATE payment_status=paid',title:'Đánh dấu đã thanh toán',
+  desc:'API webhook CHỈ set payment_status=paid. KHÔNG set status=confirmed nữa — việc chuyển Order.Status sang confirmed do worker xử lý khi nhận ORDER_PAID (xem Flow 5 / State machine).',
   file:'internal/service/orderService.go:161',
   code:`return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-	"payment_status": domain.PaymentStatusPaid,   // "paid"
-	"status":         domain.OrderStatusConfirmed, // "confirmed"
+	"payment_status": domain.PaymentStatusPaid, // "paid"
 })
-
-// Nhánh thất bại:
-case "payment_intent.payment_failed":
-	return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-		"payment_status": domain.PaymentStatusFailed,
-	})`},
- {from:1,to:3,kind:'ret',label:'200 OK',title:'Báo Stripe đã xử lý xong',
-  desc:'Trả 200 để Stripe ngừng retry. Nếu trả lỗi hoặc timeout, Stripe sẽ gửi LẠI event này (exponential backoff, tới 3 ngày) → handler phải an toàn khi chạy lặp (idempotent).',
+// Lưu ý: KHÔNG còn "status": confirmed ở đây.
+// Worker (internal/worker) mới chuyển status=confirmed.`},
+ {from:1,to:3,kind:'ret',label:'200 OK',title:'Báo payOS đã xử lý xong',
+  desc:'Trả 200 để payOS ngừng retry. Nếu trả lỗi hoặc timeout, payOS sẽ gửi LẠI webhook → handler phải an toàn khi chạy lặp (idempotent: đơn đã paid thì xử lý lại vẫn vô hại).',
   code:`return ctx.SendStatus(fiber.StatusOK)
 
-// Stripe retry schedule khi không nhận được 2xx:
-//   ngay lập tức, 5 phút, 30 phút, 2 giờ, ... tối đa 3 ngày
+// payOS retry khi không nhận được 2xx
 // => webhook handler PHẢI idempotent`},
 ]);
 
@@ -850,9 +858,9 @@ aws sqs get-queue-attributes \\
                     ApproximateNumberOfMessagesNotVisible
 
 # MessageRetentionPeriod: 60s -> 14 ngày (default 4 ngày)`},
- {t:'3 · ReceiveMessage — long polling',f:'consumer (ví dụ — ngoài repo này)',
-  d:'Consumer poll queue. WaitTimeSeconds=20 (long polling) — giữ kết nối mở tới 20s thay vì hỏi liên tục → giảm số request rỗng, giảm chi phí, nhận message gần như tức thì.',
-  c:`// Ví dụ consumer Go:
+ {t:'3 · ReceiveMessage — long polling',f:'internal/worker/ (make worker)',
+  d:'Worker poll queue. WaitTimeSeconds=20 (long polling) — giữ kết nối mở tới 20s thay vì hỏi liên tục → giảm số request rỗng, giảm chi phí, nhận message gần như tức thì.',
+  c:`// Worker Go (internal/worker):
 for {
 	out, err := sqsClient.ReceiveMessage(&sqs.ReceiveMessageInput{
 		QueueUrl:            aws.String(queueURL),
@@ -924,42 +932,43 @@ showSqs(0);
 
 /* ═══════════ 5. state machine edge details ═══════════ */
 const SM_EDGES={
- confirm:{t:'pending → confirmed (đồng thời pending → paid)',
-  d:'Kích hoạt bởi webhook payment_intent.succeeded. Cả 2 state machine chuyển cùng một câu UPDATE.',
-  f:'internal/service/orderService.go:148',
-  c:`case "payment_intent.succeeded":
-	orderID, err := payment.ExtractOrderID(event)
-	...
-	return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-		"payment_status": domain.PaymentStatusPaid,
-		"status":         domain.OrderStatusConfirmed,
-	})`},
- paid:{t:'PaymentStatus: pending → paid',
-  d:'Cùng câu UPDATE với pending → confirmed ở trên — webhook succeeded chuyển cả 2 trạng thái một lúc.',
+ confirm:{t:'pending → confirmed (do WORKER thực hiện)',
+  d:'KHÔNG phải webhook. Webhook payOS chỉ set payment_status=paid rồi publish ORDER_PAID. Worker nhận ORDER_PAID mới chuyển Order.Status sang confirmed (có guard idempotency).',
+  f:'internal/worker/handlers.go (handleOrderPaid)',
+  c:`func (w *Worker) handleOrderPaid(ev queue.OrderEvent) error {
+	order, err := w.orderRepo.FindOrderByID(ev.OrderID)
+	if err != nil { return err }
+	if order.Status == domain.OrderStatusConfirmed {
+		return nil // idempotent: đã confirm rồi -> bỏ qua
+	}
+	if err := w.orderRepo.UpdateOrder(ev.OrderID, map[string]interface{}{
+		"status": domain.OrderStatusConfirmed, // "confirmed"
+	}); err != nil { return err }
+	return w.mailer.SendPaymentReceived(order) // email "đã nhận tiền"
+}`},
+ paid:{t:'PaymentStatus: pending → paid (do WEBHOOK)',
+  d:'Webhook payOS verify signature + đối chiếu amount rồi set CHỈ payment_status=paid. Không đụng Order.Status — đó là việc của worker.',
   f:'internal/service/orderService.go:161',
   c:`return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
-	"payment_status": domain.PaymentStatusPaid,
-	"status":         domain.OrderStatusConfirmed,
-})`},
+	"payment_status": domain.PaymentStatusPaid, // "paid"
+})
+// KHÔNG set status=confirmed ở đây — worker làm việc đó.`},
  failed:{t:'PaymentStatus: pending → failed',
-  d:'Kích hoạt bởi webhook payment_intent.payment_failed (thẻ bị từ chối, hết tiền…). CHỈ đổi payment_status — Order.Status vẫn pending để user thử trả lại.',
+  d:'Kích hoạt khi webhook payOS báo thất bại (success=false / code != "00"). CHỈ đổi payment_status — Order.Status vẫn pending để khách thử trả lại.',
   f:'internal/service/orderService.go:166',
-  c:`case "payment_intent.payment_failed":
-	orderID, err := payment.ExtractOrderID(event)
-	if err != nil {
-		return nil
-	}
+  c:`if !p.Success || p.Code != "00" {
 	return s.orderRepo.UpdateOrder(orderID, map[string]interface{}{
 		"payment_status": domain.PaymentStatusFailed,
-	})`},
+	})
+}`},
  retry:{t:'failed → (thử lại) → pending/paid',
-  d:'Không phải transition trong DB — user gọi lại POST /orders/payment/intent. Guard chỉ chặn đơn ĐÃ paid, nên đơn failed vẫn tạo intent mới được.',
+  d:'Không phải transition trong DB — khách gọi lại POST /orders/payment/link. Guard chỉ chặn đơn ĐÃ paid, nên đơn failed vẫn tạo payment link mới được.',
   f:'internal/service/orderService.go:119',
   c:`// Guard CHỈ chặn paid — failed vẫn được thử lại:
 if order.PaymentStatus == domain.PaymentStatusPaid {
 	return nil, errors.New("order is already paid")
 }
-// -> tạo PaymentIntent mới, lặp lại Flow 3`},
+// -> tạo payment link mới, lặp lại Flow 4`},
 };
 document.querySelectorAll('svg .edge.impl').forEach(e=>{
   e.addEventListener('click',()=>{

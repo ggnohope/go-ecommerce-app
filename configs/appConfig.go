@@ -19,7 +19,7 @@ type AppConfig struct {
 	EmailNotification  notification.NotificationClient
 	S3Client           *storage.S3Client
 	SQSClient          *queue.SQSClient
-	StripeClient       *payment.StripeClient
+	PayOSClient        *payment.PayOSClient
 }
 
 func SetupEnv() (AppConfig, error) {
@@ -84,13 +84,18 @@ func SetupEnv() (AppConfig, error) {
 		log.Println("WARNING: AWS_SQS_ORDER_QUEUE_URL not set — order events disabled")
 	}
 
-	// Stripe (optional — payment intents disabled if not configured)
-	var stripeClient *payment.StripeClient
-	if secretKey := os.Getenv("STRIPE_SECRET_KEY"); secretKey != "" {
-		webhookSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
-		stripeClient = payment.NewStripeClient(secretKey, webhookSecret)
+	// payOS (optional — payment links disabled if not configured)
+	var payosClient *payment.PayOSClient
+	if clientID := os.Getenv("PAYOS_CLIENT_ID"); clientID != "" {
+		payosClient = payment.NewPayOSClient(
+			clientID,
+			os.Getenv("PAYOS_API_KEY"),
+			os.Getenv("PAYOS_CHECKSUM_KEY"),
+			os.Getenv("PAYOS_RETURN_URL"),
+			os.Getenv("PAYOS_CANCEL_URL"),
+		)
 	} else {
-		log.Println("WARNING: STRIPE_SECRET_KEY not set — payment intents disabled")
+		log.Println("WARNING: PAYOS_CLIENT_ID not set — payment links disabled")
 	}
 
 	return AppConfig{
@@ -100,6 +105,6 @@ func SetupEnv() (AppConfig, error) {
 		EmailNotification: notificationClient,
 		S3Client:          s3Client,
 		SQSClient:         sqsClient,
-		StripeClient:      stripeClient,
+		PayOSClient:       payosClient,
 	}, nil
 }

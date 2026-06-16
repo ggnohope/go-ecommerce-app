@@ -78,7 +78,7 @@ func StartServer(config configs.AppConfig) {
 		NotificationClient: config.EmailNotification,
 		S3Client:           config.S3Client,
 		SQSClient:          config.SQSClient,
-		StripeClient:       config.StripeClient,
+		PayOSClient:        config.PayOSClient,
 	}
 
 	handlers.SetupUserRoutes(&h)

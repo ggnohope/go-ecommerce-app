@@ -18,5 +18,5 @@ type RestHandler struct {
 	NotificationClient notification.NotificationClient
 	S3Client           *storage.S3Client
 	SQSClient          *queue.SQSClient
-	StripeClient       *payment.StripeClient
+	PayOSClient        *payment.PayOSClient
 }
