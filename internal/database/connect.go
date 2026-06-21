@@ -12,11 +12,9 @@ import (
 
 // Connect opens a GORM connection using DATA_SOURCE_NAME. It is used by the
 // standalone migrate/seed commands so they don't need to boot the full app
-// (and its AWS clients). In development it loads variables from .env first.
+// (and its AWS clients).
 func Connect() (*gorm.DB, error) {
-	if os.Getenv("APP_ENV") == "development" {
-		_ = godotenv.Load()
-	}
+	_ = godotenv.Load()
 	dsn := os.Getenv("DATA_SOURCE_NAME")
 	if dsn == "" {
 		return nil, errors.New("DATA_SOURCE_NAME is not set")

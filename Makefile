@@ -4,14 +4,14 @@ build:
 	go build -o bin/ecommerce main.go
 
 server:
-	APP_ENV=development go run main.go
+	go run main.go
 
 worker:
-	APP_ENV=development go run cmd/worker/main.go
+	go run cmd/worker/main.go
 
 dev:
 	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; go install github.com/air-verse/air@latest; }
-	APP_ENV=development air
+	air
 
 install-dev:
 	go install github.com/air-verse/air@latest
@@ -22,14 +22,14 @@ swagger:
 
 # ── Database migrations & seeding ───────────────────────────────────────────
 migrate-up:
-	APP_ENV=development go run ./cmd/migrate up
+	go run ./cmd/migrate up
 
 # Roll back the last migration, or N with: make migrate-down n=3
 migrate-down:
-	APP_ENV=development go run ./cmd/migrate down $(n)
+	go run ./cmd/migrate down $(n)
 
 migrate-status:
-	APP_ENV=development go run ./cmd/migrate status
+	go run ./cmd/migrate status
 
 # Scaffold a new migration pair: make migrate-create name=create_reviews
 migrate-create:
@@ -41,4 +41,4 @@ migrate-create:
 	 echo "created $$up"; echo "created $$down"
 
 seed:
-	APP_ENV=development go run ./cmd/seed
+	go run ./cmd/seed

@@ -13,19 +13,17 @@ import (
 )
 
 type AppConfig struct {
-	ServerPort         string
-	DSN                string
-	AppSecret          string
-	EmailNotification  notification.NotificationClient
-	S3Client           *storage.S3Client
-	SQSClient          *queue.SQSClient
-	PayOSClient        *payment.PayOSClient
+	ServerPort        string
+	DSN               string
+	AppSecret         string
+	EmailNotification notification.NotificationClient
+	S3Client          *storage.S3Client
+	SQSClient         *queue.SQSClient
+	PayOSClient       *payment.PayOSClient
 }
 
 func SetupEnv() (AppConfig, error) {
-	if os.Getenv("APP_ENV") == "development" {
-		godotenv.Load()
-	}
+	_ = godotenv.Load()
 
 	httpPort := os.Getenv("HTTP_PORT")
 	if httpPort == "" {
