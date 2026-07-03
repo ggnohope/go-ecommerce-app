@@ -1,48 +1,48 @@
-# SQS giải thích — đi theo hành trình một order
+# SQS explained — following the journey of a single order
 
-> Tài liệu học theo kiểu **kể chuyện**: ta bám theo **một order duy nhất** đi qua hệ thống,
-> từ lúc khách bấm "đặt hàng" cho tới lúc worker xử lý xong message. Mỗi khái niệm SQS
+> A **narrative-style** learning document: we follow **one single order** as it travels through the system,
+> from the moment the customer clicks "place order" until the worker finishes processing the message. Each SQS concept
 > (queue, message, visibility timeout, long polling, at-least-once, DLQ, idempotency,
-> ReceiptHandle...) được giải thích **ngay tại chỗ nó xuất hiện** trong dòng chảy.
+> ReceiptHandle...) is explained **right where it appears** in the flow.
 >
-> **Đối tượng:** bạn đã biết AWS cơ bản (credential, region, đã dùng vài service) nhưng
-> chưa nắm cơ chế SQS / message queue. Nên ở đây ta đào sâu phần SQS, không giảng lại
-> phần account/credential cơ bản.
+> **Audience:** you already know AWS basics (credentials, regions, you've used a few services) but
+> haven't yet grasped how SQS / message queues work. So here we dig deep into SQS and don't re-teach
+> the basic account/credential material.
 >
-> Quy ước: giải thích bằng **tiếng Việt**, giữ nguyên thuật ngữ **tiếng Anh** (queue,
-> message, visibility timeout...). Code trích là **code thật** trong repo này, có kèm
-> `file:dòng` để bạn tự mở ra đối chiếu.
+> Convention: explanations are in **English**, with technical terms kept in **English** (queue,
+> message, visibility timeout...). The code excerpts are the **real code** in this repo, annotated with
+> `file:line` so you can open them yourself to compare.
 
-**Mục lục**
+**Table of contents**
 
-1. [Bức tranh lớn — vì sao cần queue](#chương-1--bức-tranh-lớn--vì-sao-cần-queue)
-2. [Đầu gửi (đã có sẵn)](#chương-2--đầu-gửi-đã-có-sẵn)
-3. [Message nằm trong queue](#chương-3--message-nằm-trong-queue)
-4. [Đầu nhận (phần ta vừa xây)](#chương-4--đầu-nhận-phần-ta-vừa-xây)
-5. [Khi xử lý lỗi](#chương-5--khi-xử-lý-lỗi)
-6. [Config AWS thật + IAM](#chương-6--config-aws-thật--iam)
-7. [Chạy thật end-to-end](#chương-7--chạy-thật-end-to-end)
+1. [The big picture — why we need a queue](#chapter-1--the-big-picture--why-we-need-a-queue)
+2. [The producer side (already in place)](#chapter-2--the-producer-side-already-in-place)
+3. [The message sitting in the queue](#chapter-3--the-message-sitting-in-the-queue)
+4. [The consumer side (what we just built)](#chapter-4--the-consumer-side-what-we-just-built)
+5. [When processing fails](#chapter-5--when-processing-fails)
+6. [Real AWS config + IAM](#chapter-6--real-aws-config--iam)
+7. [Running it for real, end-to-end](#chapter-7--running-it-for-real-end-to-end)
 
 ---
 
-## Chương 1 — Bức tranh lớn — vì sao cần queue
+## Chapter 1 — The big picture — why we need a queue
 
-Khi khách đặt một order, hệ thống cần làm vài việc *phụ*: gửi email xác nhận, sau khi
-thanh toán thì cập nhật trạng thái và gửi email "đã nhận tiền". Câu hỏi cốt lõi:
-**API service có nên tự làm hết những việc đó ngay trong lúc xử lý request không?**
+When a customer places an order, the system needs to do a few *secondary* tasks: send a confirmation email, and
+once payment goes through, update the status and send a "payment received" email. The core question:
+**should the API service do all of that work itself, right inside the request handler?**
 
-Nếu làm trực tiếp (gọi thẳng), ta gặp ba vấn đề:
+If we do it directly (calling synchronously), we hit three problems:
 
-- **Coupling chặt:** API phải biết về dịch vụ gửi mail, phải chờ nó xong. Service mail
-  chết → request đặt hàng cũng chết theo.
-- **Chịu tải kém:** flash sale 10.000 đơn/giây, mỗi đơn lại chờ gửi mail xong mới trả
-  response → API sập.
-- **Không retry tốt:** mail gửi lỗi giữa chừng thì sao? Tự viết lại logic retry trong
-  request handler rất rối và dễ mất việc.
+- **Tight coupling:** the API has to know about the mail service and wait for it to finish. If the mail
+  service dies → the order request dies along with it.
+- **Poor load handling:** in a flash sale of 10,000 orders/second, if each order waits for the email to be sent before returning a
+  response → the API collapses.
+- **Poor retries:** what happens if the email fails midway? Writing retry logic by hand inside the
+  request handler is messy and easy to drop work.
 
-Giải pháp: đặt một **queue** (hàng đợi) ở giữa. API chỉ việc **bỏ một message vào queue**
-rồi trả response ngay. Một process khác — **worker** — nhặt message ra và xử lý sau, theo
-nhịp của riêng nó.
+The solution: put a **queue** in the middle. The API simply **drops a message into the queue**
+and returns the response immediately. A separate process — the **worker** — picks the message up and processes it later, at
+its own pace.
 
 ```
    ┌──────────────┐                                  ┌──────────────┐
@@ -51,7 +51,7 @@ nhịp của riêng nó.
    └──────┬───────┘                                  └──────▲───────┘
           │                                                 │
           │  SendMessage                      ReceiveMessage│
-          │  (bỏ vào)                              (nhặt ra) │
+          │  (put in)                              (pick up) │
           ▼                                                 │
        ┌─────────────────────────────────────────────────────┐
        │                  [  SQS queue  ]                      │
@@ -59,35 +59,35 @@ nhịp của riêng nó.
        └───────────────────────────────────────────────────────┘
 ```
 
-**Điểm mấu chốt:** API service và worker **KHÔNG gọi trực tiếp nhau**. Chúng thậm chí
-không biết nhau tồn tại. Chúng chỉ cùng biết một thứ: **địa chỉ của queue** (queue URL).
-Đó chính là **decoupling**:
+**The key point:** the API service and the worker **do NOT call each other directly**. They don't even
+know the other exists. They only share one thing: **the queue's address** (queue URL).
+That is exactly **decoupling**:
 
-- API có thể trả response cho khách ngay sau khi bỏ message vào queue, không phải chờ
-  email gửi xong.
-- Worker chết, restart, deploy lại — message vẫn nằm yên trong queue chờ. Không mất việc.
-- Tải tăng đột biến → message dồn trong queue, worker xử lý dần. Queue đóng vai trò
-  **buffer** chịu tải.
-- Worker xử lý lỗi → message được **giao lại** (redeliver) để thử lần sau. Retry là tính
-  năng có sẵn của SQS, không phải tự code.
+- The API can return a response to the customer right after dropping the message into the queue, without waiting for
+  the email to be sent.
+- The worker can die, restart, or be redeployed — the message still sits safely in the queue, waiting. No work is lost.
+- A sudden load spike → messages pile up in the queue, the worker processes them gradually. The queue acts as a
+  **buffer** that absorbs load.
+- A worker processing error → the message is **redelivered** to be retried later. Retry is a built-in
+  feature of SQS, not something you code yourself.
 
-> 🔍 **Bên dưới:** SQS (Simple Queue Service) là một queue **được AWS quản lý hoàn toàn**.
-> Bạn không dựng server, không lo HA, không lo lưu trữ — chỉ gọi API qua mạng:
-> `SendMessage`, `ReceiveMessage`, `DeleteMessage`. Mọi message nằm trong vùng lưu trữ
-> phân tán của AWS, mặc định giữ tối đa **14 ngày** nếu chưa ai xử lý. Trong repo này,
-> "API service" là tiến trình `make server`, còn "worker" là tiến trình `make worker` —
-> hai process riêng biệt, có thể deploy và scale độc lập.
+> 🔍 **Under the hood:** SQS (Simple Queue Service) is a **fully AWS-managed** queue.
+> You don't stand up a server, you don't worry about HA, you don't worry about storage — you just call APIs over the network:
+> `SendMessage`, `ReceiveMessage`, `DeleteMessage`. Every message lives in AWS's distributed
+> storage and is retained by default for up to **14 days** if no one processes it. In this repo,
+> the "API service" is the `make server` process, and the "worker" is the `make worker` process —
+> two separate processes that can be deployed and scaled independently.
 
-Trong các chương sau, ta đi theo **một order cụ thể**: chương 2 là lúc API bỏ message vào,
-chương 3 là lúc message nằm chờ, chương 4–5 là lúc worker nhặt ra và xử lý (kể cả lỗi).
+In the following chapters, we follow **one specific order**: chapter 2 is when the API drops the message in,
+chapter 3 is the message waiting, chapters 4–5 are the worker picking it up and processing it (including failures).
 
 ---
 
-## Chương 2 — Đầu gửi (đã có sẵn)
+## Chapter 2 — The producer side (already in place)
 
-Đầu gửi (**producer**) là phần đã có sẵn trong repo từ trước. Hành trình bắt đầu khi khách
-gọi `POST /user/me/order`. Trong `orderService.PlaceOrder`, sau khi tạo order trong DB và
-dọn giỏ hàng, code bỏ một message vào queue:
+The producer side is the part that was already in the repo beforehand. The journey begins when the customer
+calls `POST /user/me/order`. In `orderService.PlaceOrder`, after creating the order in the DB and
+clearing the cart, the code drops a message into the queue:
 
 ```go
 // internal/service/orderService.go:77-87
@@ -104,20 +104,20 @@ dọn giỏ hàng, code bỏ một message vào queue:
 	}
 ```
 
-Vài điều đáng chú ý ngay ở đây:
+A few things worth noting right here:
 
-- `if s.sqsClient != nil` — SQS là **optional**. Nếu không cấu hình env queue URL, client
-  bằng `nil`, đoạn này bị bỏ qua, đặt hàng vẫn chạy bình thường. Order events chỉ là tính
-  năng tăng cường.
-- Publish lỗi chỉ **`log.Printf`**, **không** trả lỗi cho khách. Triết lý: việc gửi event
-  là phụ, không được làm hỏng luồng đặt hàng chính. (Đánh đổi: nếu publish lỗi thì event
-  đó mất — chấp nhận được với loại event này.)
+- `if s.sqsClient != nil` — SQS is **optional**. If the queue URL env is not configured, the client is
+  `nil`, this block is skipped, and ordering still works normally. Order events are merely an
+  enhancement feature.
+- A publish failure only logs via **`log.Printf`** and does **not** return an error to the customer. The philosophy: emitting the event
+  is secondary and must not break the main ordering flow. (The trade-off: if the publish fails, that event
+  is lost — acceptable for this kind of event.)
 
-Một event thứ hai, `ORDER_PAID`, được publish ở chỗ khác — khi Stripe báo thanh toán
-thành công qua webhook. Quan trọng: API ở đây **chỉ** đánh dấu order là `paid`
-(`payment_status=paid`) rồi publish `ORDER_PAID`. Nó **không** tự chuyển order sang
-`confirmed`. Việc chuyển sang `confirmed` (và gửi email "đã nhận tiền") thuộc về **worker** —
-xem chương 5. The API only marks the order *paid* and publishes the event; the *worker*
+A second event, `ORDER_PAID`, is published elsewhere — when Stripe reports a successful payment
+via webhook. Importantly: the API here **only** marks the order as `paid`
+(`payment_status=paid`) and then publishes `ORDER_PAID`. It does **not** transition the order to
+`confirmed` itself. The transition to `confirmed` (and sending the "payment received" email) belongs to the **worker** —
+see chapter 5. The API only marks the order *paid* and publishes the event; the *worker*
 owns the transition to `confirmed`.
 
 ```go
@@ -141,10 +141,10 @@ owns the transition to `confirmed`.
 		})
 ```
 
-Để ý cùng pattern `if s.sqsClient != nil` như ở `PlaceOrder`: SQS optional, không cấu
-hình thì bỏ qua publish nhưng order vẫn được đánh dấu `paid`.
+Notice the same `if s.sqsClient != nil` pattern as in `PlaceOrder`: SQS is optional; if it's not
+configured, the publish is skipped but the order is still marked `paid`.
 
-Vậy `PublishOrderEvent` thực sự làm gì? Đây là toàn bộ hàm:
+So what does `PublishOrderEvent` actually do? Here is the whole function:
 
 ```go
 // pkg/queue/sqs.go:45-64
@@ -170,10 +170,10 @@ func (q *SQSClient) PublishOrderEvent(event OrderEvent) error {
 }
 ```
 
-Phân tích từng phần của một **message**:
+Let's break down each part of a **message**:
 
-- **Message body** — phần dữ liệu chính. Ở đây là `OrderEvent` được `json.Marshal` thành
-  một chuỗi JSON. Cấu trúc `OrderEvent`:
+- **Message body** — the main payload. Here it's an `OrderEvent` that's been `json.Marshal`ed into
+  a JSON string. The `OrderEvent` struct:
 
   ```go
   // pkg/queue/sqs.go:20-25
@@ -185,18 +185,18 @@ Phân tích từng phần của một **message**:
   }
   ```
 
-  Nên message body trên dây trông như: `{"event_type":"ORDER_PLACED","order_id":42,"user_id":7,"amount":59.9}`.
-  SQS coi body chỉ là **một chuỗi text** — nó không hiểu JSON, không soi vào trong. Việc
-  parse JSON là trách nhiệm của bên nhận (chương 4).
+  So the message body above looks like: `{"event_type":"ORDER_PLACED","order_id":42,"user_id":7,"amount":59.9}`.
+  SQS treats the body as just **a text string** — it doesn't understand JSON and doesn't look inside. Parsing the
+  JSON is the receiver's responsibility (chapter 4).
 
-- **Message attribute `event_type`** — metadata gắn kèm, **tách rời** khỏi body. Vì sao
-  lại nhân đôi `event_type` (đã có trong body rồi)? Vì attribute đọc được **mà không cần
-  parse body** — hữu ích nếu sau này bạn muốn lọc/định tuyến message theo loại (ví dụ SNS
-  filter policy) mà không phải mở body ra. Ở repo này worker đọc từ body cho đơn giản,
-  nhưng attribute vẫn được gắn để sẵn sàng cho các use case đó.
+- **The `event_type` message attribute** — metadata attached alongside, **separate** from the body. Why
+  duplicate `event_type` (which is already in the body)? Because the attribute can be read **without
+  parsing the body** — useful if you later want to filter/route messages by type (e.g. an SNS
+  filter policy) without opening the body. In this repo the worker reads from the body for simplicity,
+  but the attribute is still attached so it's ready for those use cases.
 
-- **`QueueUrl`** — message đi vào queue nào. Giá trị `q.queueURL` đến từ **biến môi trường**.
-  Xem nơi nó được nạp:
+- **`QueueUrl`** — which queue the message goes into. The value `q.queueURL` comes from an **environment variable**.
+  See where it's loaded:
 
   ```go
   // configs/appConfig.go:77-85
@@ -211,12 +211,12 @@ Phân tích từng phần của một **message**:
   }
   ```
 
-  Hai env quyết định client: **`AWS_REGION`** (queue nằm ở region nào) và
-  **`AWS_SQS_ORDER_QUEUE_URL`** (URL đầy đủ của queue). Thiếu URL → client `nil` → đúng cái
-  `if s.sqsClient != nil` ta thấy ở trên.
+  Two env vars determine the client: **`AWS_REGION`** (which region the queue is in) and
+  **`AWS_SQS_ORDER_QUEUE_URL`** (the queue's full URL). A missing URL → a `nil` client → exactly the
+  `if s.sqsClient != nil` we saw above.
 
-> 🔍 **Bên dưới — credential lấy từ đâu?** Để ý hàm tạo client **không** truyền access key
-> ở bất kỳ đâu:
+> 🔍 **Under the hood — where do the credentials come from?** Notice the client constructor does **not** pass an access key
+> anywhere:
 >
 > ```go
 > // pkg/queue/sqs.go:32-43
@@ -228,97 +228,97 @@ Phân tích từng phần của một **message**:
 > }
 > ```
 >
-> Nó chỉ truyền `Region`. AWS SDK tự tìm credential qua **default credential chain**, theo
-> thứ tự:
+> It only passes `Region`. The AWS SDK finds credentials on its own via the **default credential chain**, in
+> this order:
 >
-> 1. **Biến môi trường** — `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (và
->    `AWS_SESSION_TOKEN` nếu là tạm thời).
-> 2. **Shared config file** — `~/.aws/credentials` / `~/.aws/config` (chọn profile qua
->    `AWS_PROFILE`). Đây là cách phổ biến khi dev ở máy local.
-> 3. **IAM role** — khi chạy trên EC2 / ECS / Lambda, SDK tự lấy credential tạm thời từ
->    metadata của role gắn vào máy. Đây là cách chuẩn ở production: **không có key tĩnh
->    nào nằm trong code hay env**.
+> 1. **Environment variables** — `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (and
+>    `AWS_SESSION_TOKEN` if they're temporary).
+> 2. **Shared config file** — `~/.aws/credentials` / `~/.aws/config` (pick the profile via
+>    `AWS_PROFILE`). This is the common approach when developing locally.
+> 3. **IAM role** — when running on EC2 / ECS / Lambda, the SDK automatically pulls temporary credentials from
+>    the metadata of the role attached to the machine. This is the standard approach in production: **no static key
+>    lives in code or env**.
 >
-> Tức là: ở local bạn để key trong `~/.aws/credentials`; lên production bạn gắn IAM role —
-> **code không đổi một dòng**. Region thì luôn phải nói rõ vì queue URL gắn với một region
-> cụ thể.
+> In other words: locally you keep keys in `~/.aws/credentials`; in production you attach an IAM role —
+> **the code doesn't change a single line**. The region always has to be stated explicitly because a queue URL is tied to a
+> specific region.
 
-Đến đây message của order đã rời khỏi API và nằm trong queue. Chương sau xem nó "sống" thế
-nào trong lúc chờ.
+At this point the order's message has left the API and is sitting in the queue. The next chapter looks at how it "lives"
+while waiting.
 
 ---
 
-## Chương 3 — Message nằm trong queue
+## Chapter 3 — The message sitting in the queue
 
-Bây giờ message của order đang nằm trong queue, chờ ai đó nhặt ra. Đây là lúc cần hiểu
-**những cơ chế ngầm** của SQS — chúng quyết định cách ta phải viết worker ở chương sau.
+Now the order's message is sitting in the queue, waiting for someone to pick it up. This is where you need to understand
+SQS's **hidden mechanics** — they determine how we have to write the worker in the next chapter.
 
-> 🔍 **Bên dưới — at-least-once delivery (giao ít nhất một lần)**
+> 🔍 **Under the hood — at-least-once delivery**
 >
-> SQS standard queue bảo đảm mỗi message được giao **ít nhất một lần**, **không** bảo đảm
-> *đúng* một lần. Nghĩa là: bình thường mỗi message được giao 1 lần, nhưng trong một số
-> tình huống (mạng chập chờn, message được nhân bản qua nhiều server lưu trữ của SQS) bạn
-> có thể nhận **cùng một message hai lần**.
+> An SQS standard queue guarantees each message is delivered **at least once**, and does **not** guarantee
+> *exactly* once. Meaning: normally each message is delivered once, but in certain
+> situations (flaky network, the message being replicated across SQS's multiple storage servers) you
+> may receive **the same message twice**.
 >
-> Đây không phải bug — đó là đánh đổi để đạt throughput và độ sẵn sàng cực cao. Hệ quả
-> trực tiếp: **worker phải chịu được việc xử lý trùng** mà không gây hại. Khái niệm này gọi
-> là **idempotency**, ta sẽ làm ở chương 5.
+> This isn't a bug — it's the trade-off for achieving extremely high throughput and availability. The direct
+> consequence: **the worker must tolerate processing duplicates** without harm. This concept is called
+> **idempotency**, which we'll handle in chapter 5.
 
-> 🔍 **Bên dưới — visibility timeout (vì sao message "biến mất" tạm thời)**
+> 🔍 **Under the hood — visibility timeout (why a message "disappears" temporarily)**
 >
-> Khi worker gọi `ReceiveMessage` và nhặt được message, message đó **không bị xóa khỏi
-> queue**. Thay vào đó nó bị **ẩn đi** trong một khoảng thời gian gọi là **visibility
-> timeout** (mặc định 30 giây). Trong khoảng này, các consumer khác gọi `ReceiveMessage`
-> sẽ **không thấy** message đó.
+> When the worker calls `ReceiveMessage` and picks up a message, that message is **not deleted from the
+> queue**. Instead it is **hidden** for a period called the **visibility
+> timeout** (default 30 seconds). During this period, other consumers calling `ReceiveMessage`
+> will **not see** that message.
 >
-> Mục đích: tránh hai worker xử lý cùng một message song song. Khi đang xử lý, message
-> "vô hình" với mọi người khác.
+> The purpose: prevent two workers from processing the same message in parallel. While it's being processed, the message is
+> "invisible" to everyone else.
 >
-> Có hai kết cục:
+> There are two outcomes:
 >
-> - Worker xử lý **xong** và gọi `DeleteMessage` → message biến mất vĩnh viễn. Xong việc.
-> - Worker **chưa** xóa (đang xử lý lâu, hoặc bị crash) và visibility timeout **hết hạn**
->   → message **hiện lại** trong queue, sẵn sàng để giao cho lần nhặt tiếp theo. Đây chính
->   là cơ chế **retry tự động**.
+> - The worker **finishes** processing and calls `DeleteMessage` → the message disappears permanently. Done.
+> - The worker has **not** deleted it (still processing for a long time, or it crashed) and the visibility timeout **expires**
+>   → the message **reappears** in the queue, ready to be delivered on the next pickup. This is exactly the
+>   **automatic retry** mechanism.
 >
-> ⚠️ Đây là một cái bẫy kinh điển: nếu handler của bạn xử lý **lâu hơn** visibility timeout,
-> message sẽ hiện lại **giữa chừng** trong lúc bạn vẫn đang xử lý → một worker khác nhặt nó
-> và xử lý **lần nữa** → trùng. Hoặc đặt visibility timeout đủ dài hơn thời gian xử lý tối
-> đa, hoặc thiết kế xử lý idempotent (tốt nhất là cả hai).
+> ⚠️ This is a classic trap: if your handler takes **longer** than the visibility timeout,
+> the message will reappear **mid-processing** while you're still working on it → another worker picks it up
+> and processes it **again** → a duplicate. Either set the visibility timeout safely longer than the maximum
+> processing time, or design idempotent processing (ideally both).
 
-> 🔍 **Bên dưới — standard vs FIFO queue**
+> 🔍 **Under the hood — standard vs FIFO queue**
 >
-> SQS có hai loại queue:
+> SQS has two queue types:
 >
 > | | **Standard** | **FIFO** |
 > |---|---|---|
-> | Thứ tự | Không bảo đảm | Bảo đảm đúng thứ tự (First-In-First-Out) |
-> | Giao hàng | At-least-once (có thể trùng) | Exactly-once (chống trùng trong cửa sổ 5 phút) |
-> | Throughput | Gần như không giới hạn | Có giới hạn (300–3000 msg/s) |
-> | Tên queue | tùy | bắt buộc đuôi `.fifo` |
+> | Ordering | Not guaranteed | Strictly ordered (First-In-First-Out) |
+> | Delivery | At-least-once (may duplicate) | Exactly-once (dedup within a 5-minute window) |
+> | Throughput | Nearly unlimited | Limited (300–3000 msg/s) |
+> | Queue name | any | must end in `.fifo` |
 >
-> Repo này dùng **standard queue** — đơn giản, throughput cao, và việc order events không
-> bắt buộc đúng thứ tự tuyệt đối. Cái giá phải trả là *có thể trùng* và *có thể lệch thứ
-> tự* → ta xử lý bằng idempotency. FIFO chỉ cần khi thứ tự là bắt buộc nghiêm ngặt (ví dụ:
-> các bước của một giao dịch tài chính phải theo đúng trình tự).
+> This repo uses a **standard queue** — simple, high throughput, and order events don't
+> require strict ordering. The price is that *duplicates are possible* and *order may be skewed*
+> → we handle that with idempotency. FIFO is only needed when ordering is strictly required (e.g.
+> the steps of a financial transaction that must follow an exact sequence).
 
-**Vì sao có thể nhận trùng — tóm gọn ba nguồn:**
+**Why duplicates can happen — three sources in short:**
 
-1. **At-least-once** của standard queue: bản chất SQS có thể giao lại.
-2. **Visibility timeout hết hạn giữa chừng**: handler chậm hơn timeout → message hiện lại
-   trong khi vẫn đang xử lý.
-3. **Crash sau xử lý, trước khi `DeleteMessage`**: worker làm xong việc (đã gửi mail) rồi
-   chết ngay trước khi kịp xóa → message hiện lại → lần sau xử lý lại từ đầu.
+1. **At-least-once** of a standard queue: by nature, SQS may redeliver.
+2. **Visibility timeout expiring mid-processing**: the handler is slower than the timeout → the message reappears
+   while still being processed.
+3. **Crash after processing, before `DeleteMessage`**: the worker finishes the work (already sent the email) and then
+   dies right before it gets to delete → the message reappears → next time it's processed from scratch.
 
-Cả ba đều dẫn về cùng một kết luận: **đừng giả định mỗi message chỉ chạy đúng một lần.**
-Đây là lý do chương 5 phải nói về idempotency. Giờ sang chương 4 — phần worker nhặt message.
+All three lead to the same conclusion: **don't assume each message runs exactly once.**
+This is why chapter 5 has to talk about idempotency. Now on to chapter 4 — the worker picking up the message.
 
 ---
 
-## Chương 4 — Đầu nhận (phần ta vừa xây)
+## Chapter 4 — The consumer side (what we just built)
 
-Đây là nửa vòng lặp mà repo trước đây **còn thiếu** và ta vừa xây: **consumer**. Trái tim
-của nó là hàm `processOnce` — nhận một batch message, xử lý từng cái, xóa cái nào xử lý xong.
+This is the half of the loop that the repo **was missing** before and that we just built: the **consumer**. Its heart
+is the `processOnce` function — receive a batch of messages, process each one, delete whichever ones succeed.
 
 ```go
 // internal/worker/consumer.go:62-90
@@ -353,7 +353,7 @@ func (c *Consumer) processOnce() error {
 }
 ```
 
-Và hàm `ReceiveMessages` mà nó gọi:
+And the `ReceiveMessages` function it calls:
 
 ```go
 // pkg/queue/sqs.go:69-80
@@ -371,42 +371,42 @@ func (q *SQSClient) ReceiveMessages(maxMessages, waitSeconds int64) ([]*sqs.Mess
 }
 ```
 
-Lưu ý lời gọi `c.queue.ReceiveMessages(10, 20)` — `maxMessages=10`, `waitSeconds=20`.
+Note the call `c.queue.ReceiveMessages(10, 20)` — `maxMessages=10`, `waitSeconds=20`.
 
-**`waitSeconds=20` → long polling.** Đây là khái niệm quan trọng:
+**`waitSeconds=20` → long polling.** This is an important concept:
 
-> 🔍 **Bên dưới — long polling vs short polling**
+> 🔍 **Under the hood — long polling vs short polling**
 >
-> - **Short polling** (`WaitTimeSeconds=0`): `ReceiveMessage` trả về **ngay lập tức**. Nếu
->   queue rỗng → trả về danh sách rỗng tức thì. Worker phải gọi lại liên tục → **tốn rất
->   nhiều API call** (mỗi call là tiền) và phần lớn trả về rỗng. Ngoài ra, do SQS lưu trữ
->   phân tán, short polling chỉ hỏi *một phần* các server → đôi khi báo "rỗng" dù thực ra
->   có message.
-> - **Long polling** (`WaitTimeSeconds=1..20`): nếu queue rỗng, SQS **giữ kết nối mở** tối
->   đa `waitSeconds` giây, **chờ** có message tới thì trả về ngay. Hết thời gian chờ mà vẫn
->   rỗng mới trả danh sách rỗng. Lợi: **giảm số API call** (đỡ tốn tiền), **giảm latency**
->   (message tới là nhận gần như tức thì), và quét toàn bộ server lưu trữ nên không bỏ sót.
+> - **Short polling** (`WaitTimeSeconds=0`): `ReceiveMessage` returns **immediately**. If the
+>   queue is empty → it returns an empty list right away. The worker has to call repeatedly → it **burns a lot
+>   of API calls** (each call costs money) and most return empty. Also, because SQS storage is
+>   distributed, short polling only queries *a subset* of the servers → it sometimes reports "empty" even when there
+>   actually is a message.
+> - **Long polling** (`WaitTimeSeconds=1..20`): if the queue is empty, SQS **keeps the connection open** for up to
+>   `waitSeconds` seconds, **waiting** for a message to arrive and returning right away when one does. Only when the wait time elapses with the queue still
+>   empty does it return an empty list. Benefits: **fewer API calls** (less cost), **lower latency**
+>   (a message arriving is received almost instantly), and it scans every storage server so nothing is missed.
 >
-> 20 giây là **giá trị tối đa** SQS cho phép. Gần như mọi consumer production đều nên dùng
+> 20 seconds is the **maximum value** SQS allows. Nearly every production consumer should use
 > long polling.
 
-**`maxMessages=10` → batch.** Một lần `ReceiveMessage` lấy **tối đa 10 message** (đây là
-giới hạn cứng của SQS). Lấy theo lô giúp giảm số round-trip mạng. Code lặp `for _, m := range msgs`
-xử lý từng message trong lô.
+**`maxMessages=10` → batch.** A single `ReceiveMessage` fetches **up to 10 messages** (this is
+SQS's hard limit). Fetching in batches reduces network round-trips. The `for _, m := range msgs` loop
+processes each message in the batch.
 
-**Quy tắc vàng: chỉ `DeleteMessage` SAU KHI handler thành công.** Nhìn kỹ thứ tự trong
+**The golden rule: only `DeleteMessage` AFTER the handler succeeds.** Look closely at the ordering in
 `processOnce`:
 
-- `dispatch(event)` trả lỗi → `continue`, **KHÔNG xóa**. Message ở lại queue, hết visibility
-  timeout sẽ hiện lại để thử lại (chương 5).
-- `dispatch(event)` trả `nil` (thành công) → `c.deleteQuietly(*m.ReceiptHandle)` mới xóa.
+- `dispatch(event)` returns an error → `continue`, **do NOT delete**. The message stays in the queue, and once the visibility
+  timeout expires it reappears to be retried (chapter 5).
+- `dispatch(event)` returns `nil` (success) → only then does `c.deleteQuietly(*m.ReceiptHandle)` delete it.
 
-Đây là điểm cốt lõi của toàn bộ thiết kế SQS: **message chỉ biến mất khi việc đã làm xong**.
-Xóa *trước* khi xử lý (xóa ngay sau khi nhận) là sai lầm chết người — worker crash giữa
-chừng thì việc đó **mất luôn**, không ai biết. Xóa *sau* khi xử lý xong nghĩa là worst case
-chỉ là *làm lại* (nhờ idempotency), không bao giờ *mất việc*.
+This is the core of the entire SQS design: **a message only disappears once the work is done**.
+Deleting *before* processing (deleting right after receiving) is a fatal mistake — if the worker crashes mid-way,
+that work is **lost forever**, and no one knows. Deleting *after* processing means the worst case
+is just *doing it again* (thanks to idempotency), never *losing work*.
 
-**Xóa bằng `ReceiptHandle`, KHÔNG phải `order_id` hay message ID.** Để ý ta truyền
+**Delete by `ReceiptHandle`, NOT by `order_id` or the message ID.** Notice we pass
 `*m.ReceiptHandle`:
 
 ```go
@@ -418,23 +418,23 @@ func (c *Consumer) deleteQuietly(receiptHandle string) {
 }
 ```
 
-> 🔍 **Bên dưới — ReceiptHandle là gì?** Mỗi message có một **message ID** cố định (định
-> danh message), nhưng để **xóa** thì SQS yêu cầu **ReceiptHandle** — một token **chỉ cấp
-> cho lần nhận này**. Mỗi lần `ReceiveMessage` trả về cùng một message (sau redelivery), nó
-> cấp một ReceiptHandle **mới khác**. Bạn phải xóa bằng ReceiptHandle của **chính lần nhận
-> hiện tại**; dùng cái cũ sẽ lỗi. Đây là cách SQS xác nhận "tôi xóa đúng cái message mà tôi
-> vừa cầm trên tay", chứ không phải `order_id` (cái này nằm trong body, SQS không quan tâm).
+> 🔍 **Under the hood — what is a ReceiptHandle?** Each message has a fixed **message ID** (the message's
+> identifier), but to **delete** it SQS requires the **ReceiptHandle** — a token **issued only
+> for this particular receive**. Each time `ReceiveMessage` returns the same message (after redelivery), it
+> issues a **new, different** ReceiptHandle. You must delete with the ReceiptHandle of the **current
+> receive**; using an old one will fail. This is how SQS confirms "I'm deleting exactly the message I
+> just held in my hand," rather than by `order_id` (which is in the body, and SQS doesn't care about it).
 
-**Hai trường hợp đặc biệt trong code thật:**
+**Two special cases in the real code:**
 
-1. **Poison message (body không parse được)** — nếu `json.Unmarshal` lỗi, message này sẽ
-   **không bao giờ** parse được, nên retry vô hạn là vô nghĩa và sẽ **chặn** queue. Code
-   chọn cách **xóa luôn** (kèm log) để không kẹt. Đây là quyết định có chủ đích — nếu muốn
-   giữ lại để điều tra, bạn để nó rớt DLQ thay vì xóa.
+1. **Poison message (body that won't parse)** — if `json.Unmarshal` fails, this message will
+   **never** parse, so retrying infinitely is pointless and would **block** the queue. The code
+   chooses to **delete it outright** (with a log) so it doesn't get stuck. This is a deliberate decision — if you want
+   to keep it for investigation, you'd let it fall to the DLQ instead of deleting it.
 
-2. **Receive error backoff** — nếu chính `ReceiveMessages` lỗi (sai credential, mất mạng,
-   queue bị xóa...), `processOnce` trả lỗi và `Run` **chờ một nhịp** rồi mới thử lại, tránh
-   quay vòng nóng (busy-loop) đốt CPU:
+2. **Receive error backoff** — if `ReceiveMessages` itself errors (wrong credentials, network loss,
+   the queue was deleted...), `processOnce` returns an error and `Run` **waits a beat** before retrying, to avoid
+   hot-spinning (a busy-loop) that burns CPU:
 
    ```go
    // internal/worker/consumer.go:36-57
@@ -462,54 +462,54 @@ func (c *Consumer) deleteQuietly(receiptHandle string) {
    }
    ```
 
-   `receiveErrorBackoff` là 5 giây (`internal/worker/consumer.go:17`). Để ý cả vòng lặp
-   `Run` tôn trọng `ctx.Done()` — đó là **graceful shutdown**: khi nhận SIGINT/SIGTERM,
-   worker dừng nhặt batch mới, không cắt ngang việc đang làm. Message nào chưa kịp
-   `DeleteMessage` sẽ tự hiện lại sau visibility timeout — an toàn nhờ đúng quy tắc vàng ở
-   trên.
+   `receiveErrorBackoff` is 5 seconds (`internal/worker/consumer.go:17`). Notice the whole `Run` loop
+   respects `ctx.Done()` — that's **graceful shutdown**: when it receives SIGINT/SIGTERM, the
+   worker stops picking up new batches without interrupting the work in progress. Any message not yet
+   `DeleteMessage`d will reappear after the visibility timeout — safe thanks to the golden rule
+   above.
 
 ---
 
-## Chương 5 — Khi xử lý lỗi
+## Chapter 5 — When processing fails
 
-Đây là chỗ at-least-once và visibility timeout (chương 3) gặp nhau và trở thành cơ chế
-**retry + DLQ** thực thụ. Đi theo order của ta khi mọi thứ *không* suôn sẻ.
+This is where at-least-once and the visibility timeout (chapter 3) meet and become a real
+**retry + DLQ** mechanism. Let's follow our order when things *don't* go smoothly.
 
-**Vòng đời của một message bị lỗi:**
+**The lifecycle of a failed message:**
 
 ```
-   nhận lần 1 ─▶ handler lỗi ─▶ KHÔNG xóa ─▶ ẩn (visibility timeout) ─┐
-       ▲                                                              │
-       └────────── hiện lại sau timeout ◀─────────────────────────────┘
-   ... lặp lại tối đa maxReceiveCount lần ...
-   nhận lần thứ (maxReceiveCount+1) ─▶ SQS chuyển sang ─▶ [ DLQ ]
+   receive #1 ─▶ handler error ─▶ NOT deleted ─▶ hidden (visibility timeout) ─┐
+       ▲                                                                       │
+       └────────── reappears after timeout ◀────────────────────────────────────┘
+   ... repeats up to maxReceiveCount times ...
+   receive #(maxReceiveCount+1) ─▶ SQS moves it to ─▶ [ DLQ ]
 ```
 
-- Handler trả lỗi → `processOnce` **không xóa** → message ở lại.
-- Hết **visibility timeout** → message **hiện lại** → worker nhặt lại → **retry**.
-- Cứ thế lặp. SQS đếm số lần một message được nhận (`ApproximateReceiveCount`).
-- Khi vượt **`maxReceiveCount`** (ta đặt = 5 ở chương 6), SQS tự **chuyển message sang
-  Dead Letter Queue (DLQ)** — một queue riêng dành cho các message "độc", thay vì để chúng
-  retry vô hạn.
+- Handler returns an error → `processOnce` **does not delete** → the message stays.
+- The **visibility timeout** expires → the message **reappears** → the worker picks it up again → **retry**.
+- And so it repeats. SQS counts how many times a message has been received (`ApproximateReceiveCount`).
+- When it exceeds **`maxReceiveCount`** (we set it to 5 in chapter 6), SQS automatically **moves the message to a
+  Dead Letter Queue (DLQ)** — a separate queue for "poison" messages, instead of letting them
+  retry forever.
 
-> 🔍 **Bên dưới — Dead Letter Queue (DLQ)** là một queue thường, nhưng được gắn làm "thùng
-> rác có kiểm soát" cho queue chính qua **RedrivePolicy**. Khi một message thất bại quá
-> `maxReceiveCount` lần, SQS tự đẩy nó sang DLQ. Lợi ích: (1) queue chính không bị **kẹt**
-> bởi một message hỏng cứ retry mãi; (2) bạn có một nơi để **điều tra** các message lỗi
-> (mở DLQ ra xem body, log) mà không mất chúng; (3) sau khi sửa bug, có thể **redrive**
-> (đẩy ngược) message từ DLQ về queue chính để xử lý lại.
+> 🔍 **Under the hood — Dead Letter Queue (DLQ)** is an ordinary queue, but attached as a "controlled
+> trash bin" for the main queue via the **RedrivePolicy**. When a message fails more than
+> `maxReceiveCount` times, SQS automatically pushes it to the DLQ. Benefits: (1) the main queue doesn't get **stuck**
+> by a broken message that keeps retrying forever; (2) you have a place to **investigate** the failed
+> messages (open the DLQ and inspect the body, the log) without losing them; (3) after fixing the bug, you can **redrive**
+> (push back) the message from the DLQ to the main queue to reprocess it.
 
-**Worker sở hữu việc chuyển sang `confirmed`.** Nhớ ở chương producer: API webhook chỉ đặt
-`payment_status=paid` rồi publish `ORDER_PAID`. Chính **worker** mới chuyển order từ `paid`
-sang `confirmed` và gửi email "đã nhận tiền". The worker — not the API — owns the
+**The worker owns the transition to `confirmed`.** Recall from the producer chapter: the API webhook only sets
+`payment_status=paid` and then publishes `ORDER_PAID`. It's the **worker** that transitions the order from `paid`
+to `confirmed` and sends the "payment received" email. The worker — not the API — owns the
 `confirmed` transition.
 
-**Idempotency — vì sao và làm thế nào.** Vì at-least-once, một message có thể chạy 2 lần.
-Với `ORDER_PAID`, chạy 2 lần mà không cẩn thận = cập nhật trạng thái 2 lần, gửi 2 email "đã
-nhận tiền". Code chặn việc đó bằng một **idempotency guard** đơn giản: kiểm tra trạng thái
-trước khi hành động. Vì giờ API **không** còn tự set `confirmed` nữa, guard này làm việc
-thật chứ không phải trang trí: lần giao đầu tiên order chưa `confirmed` → worker confirm +
-gửi mail; bản trùng giao lại thấy đã `confirmed` → bỏ qua an toàn.
+**Idempotency — why and how.** Because of at-least-once, a message may run twice.
+For `ORDER_PAID`, running twice carelessly = updating the status twice, sending two "payment
+received" emails. The code prevents that with a simple **idempotency guard**: check the status
+before acting. Since the API no longer sets `confirmed` itself, this guard does real
+work, not decoration: on the first delivery the order isn't yet `confirmed` → the worker confirms +
+sends the email; on a redelivered duplicate it sees it's already `confirmed` → it safely skips.
 
 ```go
 // internal/worker/handlers.go:58-79
@@ -537,12 +537,12 @@ func (d *Dispatcher) handleOrderPaid(event queue.OrderEvent) error {
 }
 ```
 
-Mấu chốt: `if order.Status == domain.OrderStatusConfirmed { ... return nil }`. Lần đầu xử
-lý đặt trạng thái thành `confirmed`. Nếu message tới lần hai, order **đã** `confirmed` →
-handler bỏ qua, trả `nil` (coi như thành công) → message được xóa. Không cập nhật trùng,
-không gửi mail trùng. **Trạng thái trong DB chính là cuốn sổ ghi "việc này đã làm chưa".**
+The key: `if order.Status == domain.OrderStatusConfirmed { ... return nil }`. The first time it processes,
+it sets the status to `confirmed`. If the message arrives a second time, the order is **already** `confirmed` →
+the handler skips, returns `nil` (treated as success) → the message is deleted. No duplicate update,
+no duplicate email. **The state in the DB is itself the ledger recording "has this work been done yet."**
 
-So sánh với `handleOrderPlaced` — handler này **cố ý KHÔNG** có guard:
+Compare with `handleOrderPlaced` — this handler **deliberately does NOT** have a guard:
 
 ```go
 // internal/worker/handlers.go:47-49
@@ -551,78 +551,78 @@ So sánh với `handleOrderPlaced` — handler này **cố ý KHÔNG** có guard
 	// accepted trade-off — a duplicate confirmation is benign.
 ```
 
-Bài học: **idempotency là một lựa chọn theo từng loại tác dụng phụ**. Gửi *hai* email xác
-nhận "đã nhận đơn" thì phiền nhưng vô hại → chấp nhận. Còn cập nhật trạng thái / trừ tiền
-2 lần thì nguy hiểm → phải có guard. Bạn cân nhắc theo *mức độ tai hại khi chạy trùng*.
+The lesson: **idempotency is a choice made per type of side effect**. Sending *two* "order
+received" confirmation emails is annoying but harmless → accepted. But updating the status / deducting money
+twice is dangerous → it must have a guard. You weigh it by the *severity of harm from running twice*.
 
-> 🔍 **Bên dưới — khi nào cần bảng `processed_events`?** Cách "kiểm tra trạng thái đích"
-> như trên chỉ hợp khi tác dụng phụ làm cho trạng thái **trở nên ổn định** (đã confirmed
-> thì lần sau biết để bỏ qua). Nhưng có những tác dụng phụ **không để lại dấu vết trạng
-> thái rõ ràng** — ví dụ "cộng điểm thưởng 10 điểm mỗi lần thanh toán": chạy 2 lần thành 20
-> điểm, và nhìn vào "tổng điểm" không thể biết đã cộng cho event này chưa.
+> 🔍 **Under the hood — when do you need a `processed_events` table?** The "check the target state"
+> approach above only works when the side effect makes the state **become stable** (once confirmed,
+> the next run knows to skip). But some side effects **leave no clear state
+> trace** — e.g. "add 10 loyalty points on each payment": running twice gives 20
+> points, and looking at the "total points" you can't tell whether this event has already been credited.
 >
-> Khi đó cần một bảng **`processed_events`** ghi lại **ID của từng message/event đã xử lý**.
-> Trước khi hành động: nếu event ID đã có trong bảng → bỏ qua; nếu chưa → xử lý rồi *ghi ID
-> vào bảng trong cùng một transaction*. Đây là dedup tổng quát theo message ID, không phụ
-> thuộc vào trạng thái nghiệp vụ. Repo này chưa cần (chỉ dùng guard theo trạng thái) — nêu
-> ra để bạn biết khi nào phải nâng cấp.
+> In that case you need a **`processed_events`** table that records **the ID of every message/event already processed**.
+> Before acting: if the event ID is already in the table → skip; if not → process and then *write the ID
+> into the table in the same transaction*. This is general dedup by message ID, independent
+> of business state. This repo doesn't need it yet (it only uses a state-based guard) — it's
+> mentioned so you know when you'd have to level up.
 
-### Bảng lỗi thường gặp
+### Table of common errors
 
-| Lỗi | Triệu chứng / cách nhận biết |
+| Error | Symptom / how to spot it |
 |---|---|
-| **Sai/thiếu credential** | `ReceiveMessages` trả lỗi liên tục; log `worker: receive failed, will retry` lặp đều mỗi ~5s (do backoff). Thường kèm message AWS dạng `AccessDenied`/`InvalidClientTokenId`/`NoCredentialProviders`. Kiểm tra `~/.aws/credentials` hoặc env `AWS_ACCESS_KEY_ID`. |
-| **Queue URL sai region** | Lỗi kiểu `AWS.SimpleQueueService.NonExistentQueue` hoặc `QueueDoesNotExist` — vì `AWS_REGION` trỏ region A nhưng queue URL thuộc region B. Đối chiếu region trong URL queue với `AWS_REGION`. |
-| **Poison message (body không parse được)** | Log `worker: unparseable message body, discarding` kèm body in ra. Code tự xóa nên *không* kẹt queue, nhưng nếu thấy nhiều → có producer khác đang gửi body sai định dạng vào queue. |
-| **Handler chậm hơn visibility timeout** | Cùng một `order_id` xuất hiện trong log **hai lần** (xử lý trùng) dù handler "có vẻ" chạy đúng; mail gửi lặp. Nguyên nhân: message hiện lại giữa chừng. Tăng visibility timeout của queue, hoặc bảo đảm handler idempotent. |
-| **Quên `DeleteMessage` (xóa sau xử lý)** | Cùng một message được xử lý **lặp vô hạn**, log thành công lặp đi lặp lại mãi, sau cùng rớt DLQ dù không có lỗi nào. Nguyên nhân: nhánh thành công không gọi delete. Trong repo này nhánh thành công luôn gọi `deleteQuietly` — lỗi này xuất hiện khi ai đó sửa sai thứ tự. |
+| **Wrong/missing credentials** | `ReceiveMessages` errors continuously; the log `worker: receive failed, will retry` repeats steadily every ~5s (due to backoff). Usually accompanied by an AWS message like `AccessDenied`/`InvalidClientTokenId`/`NoCredentialProviders`. Check `~/.aws/credentials` or the `AWS_ACCESS_KEY_ID` env. |
+| **Queue URL in the wrong region** | An error like `AWS.SimpleQueueService.NonExistentQueue` or `QueueDoesNotExist` — because `AWS_REGION` points to region A but the queue URL belongs to region B. Cross-check the region in the queue URL against `AWS_REGION`. |
+| **Poison message (body that won't parse)** | The log `worker: unparseable message body, discarding` along with the printed body. The code deletes it on its own so it does *not* clog the queue, but if you see many → some other producer is sending malformed bodies into the queue. |
+| **Handler slower than the visibility timeout** | The same `order_id` appears in the log **twice** (duplicate processing) even though the handler "seems" to run correctly; the email is sent twice. Cause: the message reappeared mid-processing. Increase the queue's visibility timeout, or make sure the handler is idempotent. |
+| **Forgetting `DeleteMessage` (delete after processing)** | The same message is processed **infinitely**, the success log repeats over and over, and it eventually falls to the DLQ even though no error occurred. Cause: the success branch doesn't call delete. In this repo the success branch always calls `deleteQuietly` — this bug appears when someone gets the ordering wrong. |
 
 ---
 
-## Chương 6 — Config AWS thật + IAM
+## Chapter 6 — Real AWS config + IAM
 
-Tới đây bạn đã hiểu cơ chế. Giờ dựng hạ tầng thật trên AWS. Repo này **không dùng IaC** —
-cấu hình thủ công bằng AWS CLI (hoặc Console). Thứ tự **bắt buộc**: tạo **DLQ trước**, vì
-queue chính cần ARN của DLQ để khai báo RedrivePolicy.
+By now you understand the mechanics. Now let's stand up the real infrastructure on AWS. This repo **does not use IaC** —
+configuration is done manually with the AWS CLI (or the Console). The **mandatory** order: create the **DLQ first**, because
+the main queue needs the DLQ's ARN to declare its RedrivePolicy.
 
 ```bash
-# Bước 1 — Tạo DLQ TRƯỚC (queue chính sẽ trỏ tới nó)
+# Step 1 — Create the DLQ FIRST (the main queue will point to it)
 aws sqs create-queue --queue-name order-events-dlq
 
-# Bước 2 — Lấy ARN của DLQ (cần cho RedrivePolicy ở bước 3)
-#   Thay <DLQ_URL> bằng QueueUrl mà bước 1 in ra.
+# Step 2 — Get the DLQ's ARN (needed for the RedrivePolicy in step 3)
+#   Replace <DLQ_URL> with the QueueUrl that step 1 printed.
 aws sqs get-queue-attributes --queue-url <DLQ_URL> \
   --attribute-names QueueArn
 
-# Bước 3 — Tạo queue chính `order-events`, trỏ redrive sang DLQ, tối đa 5 lần nhận
-#   Thay <DLQ_ARN> bằng giá trị QueueArn mà bước 2 in ra.
+# Step 3 — Create the main queue `order-events`, pointing redrive to the DLQ, max 5 receives
+#   Replace <DLQ_ARN> with the QueueArn value that step 2 printed.
 aws sqs create-queue --queue-name order-events \
   --attributes '{"RedrivePolicy":"{\"deadLetterTargetArn\":\"<DLQ_ARN>\",\"maxReceiveCount\":\"5\"}"}'
 ```
 
-Giải thích `RedrivePolicy`: `maxReceiveCount=5` nghĩa là một message bị nhận lại quá 5 lần
-(tức xử lý lỗi 5 lần) thì SQS đẩy nó sang `deadLetterTargetArn` (DLQ). Khớp đúng với cơ chế
-DLQ ở chương 5.
+Explaining the `RedrivePolicy`: `maxReceiveCount=5` means that a message received more than 5 times
+(i.e. processed with an error 5 times) gets pushed by SQS to the `deadLetterTargetArn` (DLQ). This matches exactly the
+DLQ mechanism in chapter 5.
 
-Sau khi tạo xong, lấy **QueueUrl của `order-events`** (không phải của DLQ) đặt vào env:
+Once created, take the **QueueUrl of `order-events`** (not the DLQ's) and put it in the env:
 
 ```bash
 export AWS_REGION=ap-southeast-1
 export AWS_SQS_ORDER_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/<account-id>/order-events
 ```
 
-Hai env này nối thẳng về `configs/appConfig.go:77-85` (chương 2): `AWS_REGION` cho biết
-queue ở region nào, `AWS_SQS_ORDER_QUEUE_URL` cho biết URL chính xác. Cả API service lẫn
-worker đều đọc **cùng** hai env này — đó là cách hai process "gặp nhau" tại cùng một queue
-mà không gọi trực tiếp nhau (chương 1).
+These two env vars connect straight back to `configs/appConfig.go:77-85` (chapter 2): `AWS_REGION` tells which
+region the queue is in, `AWS_SQS_ORDER_QUEUE_URL` tells the exact URL. Both the API service and the
+worker read the **same** two env vars — that's how the two processes "meet" at the same queue
+without calling each other directly (chapter 1).
 
-### IAM least-privilege — hai policy tách biệt
+### IAM least-privilege — two separate policies
 
-API service (producer) và worker (consumer) cần **quyền khác nhau**. Đừng cấp chung một
-credential full-access. Tạo **hai** policy, gắn cho hai identity riêng:
+The API service (producer) and the worker (consumer) need **different permissions**. Don't grant them a single shared
+full-access credential. Create **two** policies, attached to two separate identities:
 
 ```json
-// API service (producer) — CHỈ được gửi message
+// API service (producer) — may ONLY send messages
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -636,7 +636,7 @@ credential full-access. Tạo **hai** policy, gắn cho hai identity riêng:
 ```
 
 ```json
-// Worker (consumer) — được nhận, xóa, xem thuộc tính queue
+// Worker (consumer) — may receive, delete, and view queue attributes
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -653,34 +653,33 @@ credential full-access. Tạo **hai** policy, gắn cho hai identity riêng:
 }
 ```
 
-**Vì sao không dùng chung một credential full-access?** — nguyên tắc **least privilege**
-(quyền tối thiểu):
+**Why not use one shared full-access credential?** — the principle of **least privilege**:
 
-- **Giảm thiệt hại khi rò rỉ.** Nếu credential của API service bị lộ, kẻ tấn công *chỉ* có
-  thể nhồi message vào queue — **không** xóa được, **không** đọc trộm được message của
-  người khác. Nếu đó là credential full-access, chúng làm được mọi thứ.
-- **Phản ánh đúng vai trò.** Producer không có lý do gì để `DeleteMessage`; consumer không
-  có lý do gì để `SendMessage`. Tách quyền giúp một bug ở bên này không vô tình phá bên kia.
-- **Dễ audit.** Nhìn policy là biết chính xác mỗi service được làm gì.
+- **Limit the damage from a leak.** If the API service's credential is leaked, the attacker can *only*
+  stuff messages into the queue — they **cannot** delete, and **cannot** snoop on other people's
+  messages. If it were a full-access credential, they could do everything.
+- **Reflect the actual role.** A producer has no reason to `DeleteMessage`; a consumer has
+  no reason to `SendMessage`. Splitting permissions helps ensure a bug on one side doesn't accidentally break the other.
+- **Easy to audit.** Looking at the policy tells you exactly what each service is allowed to do.
 
-Lưu ý: worker cần `sqs:GetQueueAttributes` (ngoài Receive/Delete) vì một số thao tác và
-công cụ vận hành cần đọc thuộc tính queue. Nó **không** cần quyền trên DLQ — chính SQS
-(không phải worker) là bên đẩy message sang DLQ.
+Note: the worker needs `sqs:GetQueueAttributes` (in addition to Receive/Delete) because some operations and
+operational tools need to read queue attributes. It does **not** need any permission on the DLQ — it's SQS
+(not the worker) that pushes messages to the DLQ.
 
 ---
 
-## Chương 7 — Chạy thật end-to-end
+## Chapter 7 — Running it for real, end-to-end
 
-Kịch bản kiểm chứng theo **đúng thứ tự**. Cần: queue đã tạo (chương 6), env đã set, DB
-Postgres đang chạy (`docker-compose up -d`).
+A verification scenario in the **exact order**. You'll need: the queue created (chapter 6), the env set, and the Postgres
+DB running (`docker-compose up -d`).
 
-### Bước 1 — Bật API và đặt một đơn (terminal A)
+### Step 1 — Start the API and place an order (terminal A)
 
 ```bash
 make server
 ```
 
-Rồi đặt một order qua API (đăng nhập lấy token, thêm vào giỏ, rồi gọi):
+Then place an order via the API (log in to get a token, add to cart, then call):
 
 ```bash
 curl -X POST http://localhost:9000/user/me/order \
@@ -689,10 +688,10 @@ curl -X POST http://localhost:9000/user/me/order \
   -d '{"shipping_address":"123 Le Loi, Q1"}'
 ```
 
-Lúc này `PlaceOrder` đã publish một message `ORDER_PLACED` vào queue (chương 2). **Chưa**
-chạy worker, nên message còn nằm trong queue.
+At this point `PlaceOrder` has published an `ORDER_PLACED` message to the queue (chapter 2). The worker is **not yet**
+running, so the message is still sitting in the queue.
 
-### Bước 2 — Xem tận mắt message trong queue (thủ công)
+### Step 2 — See the message in the queue with your own eyes (manually)
 
 ```bash
 aws sqs receive-message --queue-url "$AWS_SQS_ORDER_QUEUE_URL" \
@@ -700,60 +699,62 @@ aws sqs receive-message --queue-url "$AWS_SQS_ORDER_QUEUE_URL" \
   --wait-time-seconds 5
 ```
 
-Bạn sẽ thấy JSON chứa `Body` (chuỗi `{"event_type":"ORDER_PLACED",...}`), một
-`MessageId`, một `ReceiptHandle` (token để xóa — chương 4), và `MessageAttributes` với
-`event_type`. Đây chính là cái worker sẽ nhặt ra.
+You'll see JSON containing `Body` (the string `{"event_type":"ORDER_PLACED",...}`), a
+`MessageId`, a `ReceiptHandle` (the token to delete — chapter 4), and `MessageAttributes` with
+`event_type`. This is exactly what the worker will pick up.
 
-> ⚠️ Lệnh này **đã nhận** message → nó đang trong **visibility timeout** (ẩn ~30s). Đừng
-> xóa nó. Chờ qua timeout, message **hiện lại** và worker ở bước 3 sẽ nhặt được. (Bạn vừa
-> tự tay quan sát visibility timeout của chương 3.)
+> ⚠️ This command **has received** the message → it's now in the **visibility timeout** (hidden ~30s). Don't
+> delete it. Wait past the timeout, the message **reappears**, and the worker in step 3 will pick it up. (You've just
+> observed the visibility timeout from chapter 3 with your own hands.)
 
-### Bước 3 — Bật worker, xem nó xử lý rồi message biến mất (terminal B)
+### Step 3 — Start the worker, watch it process and the message disappear (terminal B)
 
 ```bash
 make worker
 ```
 
-Quan sát log: `worker: started, polling for messages`, rồi
-`worker: order confirmation sent order=<id>`. Worker đã nhặt message, gọi
-`handleOrderPlaced`, gửi email xác nhận, và `DeleteMessage`. Kiểm tra lại bằng cách chạy
-lệnh `receive-message` ở bước 2 lần nữa — queue **rỗng**. Message đã xong vòng đời:
+Watch the log: `worker: started, polling for messages`, then
+`worker: order confirmation sent order=<id>`. The worker picked up the message, called
+`handleOrderPlaced`, sent the confirmation email, and `DeleteMessage`d it. Verify by running
+the `receive-message` command from step 2 again — the queue is **empty**. The message has completed its lifecycle:
 send → receive → process → delete.
 
-### Bước 4 — Cố ý gây lỗi để quan sát retry + rớt DLQ
+### Step 4 — Deliberately cause a failure to observe retry + falling to the DLQ
 
-Tạm sửa đầu `handleOrderPlaced` để **luôn trả lỗi** (nhớ `import "errors"`):
+Temporarily edit the top of `handleOrderPlaced` to **always return an error** (remember `import "errors"`):
 
 ```go
-// internal/worker/handlers.go — handleOrderPlaced, dòng đầu hàm (CHỈ để thử nghiệm)
+// internal/worker/handlers.go — handleOrderPlaced, first line of the function (FOR TESTING ONLY)
 func (d *Dispatcher) handleOrderPlaced(event queue.OrderEvent) error {
 	return errors.New("test: simulate handler failure")
-	// ... phần còn lại tạm thời không chạy tới
+	// ... the rest is temporarily unreachable
 }
 ```
 
-Đặt một order mới, rồi `make worker`. Quan sát:
+Place a new order, then `make worker`. Observe:
 
-- Log lặp `worker: handler failed, leaving message for retry ... type=ORDER_PLACED`.
-- Message **không** bị xóa → sau mỗi visibility timeout lại hiện lại → worker thử lại.
-- Sau **5 lần** (`maxReceiveCount=5`, chương 6), SQS đẩy message sang **`order-events-dlq`**.
+- The log repeats `worker: handler failed, leaving message for retry ... type=ORDER_PLACED`.
+- The message is **not** deleted → after each visibility timeout it reappears → the worker retries.
+- After **5 times** (`maxReceiveCount=5`, chapter 6), SQS pushes the message to **`order-events-dlq`**.
 
-Kiểm tra DLQ có message:
+Check that the DLQ has the message:
 
 ```bash
-# Lấy số message đang nằm trong DLQ
+# Get the number of messages currently in the DLQ
 aws sqs get-queue-attributes --queue-url <DLQ_URL> \
   --attribute-names ApproximateNumberOfMessages
 ```
 
-Hoặc mở **SQS Console** → queue `order-events-dlq` → *Send and receive messages* → *Poll
-for messages* để thấy chính cái message lỗi nằm đó. **Nhớ hoàn tác** đoạn `return errors.New(...)`
-sau khi thử xong.
+Or open the **SQS Console** → the `order-events-dlq` queue → *Send and receive messages* → *Poll
+for messages* to see that exact failed message sitting there. **Remember to revert** the `return errors.New(...)`
+snippet after you're done testing.
 
 ---
 
-Hết. Giờ bạn đã đi trọn vòng đời một message: API bỏ vào (chương 2) → nằm chờ với
-visibility timeout & at-least-once (chương 3) → worker long-poll nhặt ra, xử lý, xóa đúng
-lúc (chương 4) → lỗi thì retry và rớt DLQ, trùng thì idempotency chặn (chương 5) → trên
-hạ tầng AWS thật với IAM tách quyền (chương 6) → và tự tay kiểm chứng (chương 7). Đó là
-"cái chạy bên dưới" của SQS trong repo này.
+That's it. You've now traversed the full lifecycle of a message: the API drops it in (chapter 2) → it waits with
+visibility timeout & at-least-once (chapter 3) → the worker long-polls, picks it up, processes, and deletes at the right
+moment (chapter 4) → on failure it retries and falls to the DLQ, on duplicates idempotency guards against it (chapter 5) → on
+real AWS infrastructure with IAM permission separation (chapter 6) → and you verify it yourself (chapter 7). That's
+"what runs under the hood" of SQS in this repo.
+</content>
+</invoke>

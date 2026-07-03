@@ -60,7 +60,7 @@ Each layer depends on the one below via interfaces — services are independentl
 | **S3** | Product image hosting — sellers upload, URLs stored in DB |
 | **SQS** | Order event queue — `ORDER_PLACED` and `ORDER_PAID` published on state changes; downstream workers subscribe independently |
 
-- **Worker (consumer):** chạy `make worker` để xử lý order events. Xem giải thích chi tiết cơ chế SQS tại [docs/learning/sqs-explained.md](docs/learning/sqs-explained.md).
+- **Worker (consumer):** run `make worker` to process order events. See a detailed explanation of the SQS mechanism in [docs/learning/sqs-explained.md](docs/learning/sqs-explained.md).
 
 > Payments use **Stripe** — AWS Payment Cryptography covers card-data primitives, not a full payment gateway.
 
