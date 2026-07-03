@@ -2,27 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Xây consumer/worker thật cho go-ecommerce-app để chạy full SQS loop (send→receive→process→delete), kèm một bài giải dạng kể chuyện giúp hiểu cơ chế bên dưới.
+**Goal:** Build a real consumer/worker for go-ecommerce-app to run the full SQS loop (send→receive→process→delete), together with a narrative-style explainer that helps you understand the mechanics underneath.
 
-**Architecture:** API service (producer, đã có) publish `ORDER_PLACED`/`ORDER_PAID` vào một SQS queue. Một worker process độc lập (`cmd/worker`) long-poll queue, dispatch theo `EventType` tới handler, gửi notification / cập nhật trạng thái order một cách idempotent, rồi `DeleteMessage` chỉ khi xử lý thành công. Worker decouple hoàn toàn khỏi API qua queue.
+**Architecture:** The API service (producer, already exists) publishes `ORDER_PLACED`/`ORDER_PAID` to an SQS queue. An independent worker process (`cmd/worker`) long-polls the queue, dispatches by `EventType` to a handler, sends notifications / updates the order status idempotently, then calls `DeleteMessage` only on successful processing. The worker is fully decoupled from the API via the queue.
 
-**Tech Stack:** Go 1.26, `aws-sdk-go v1.49.0` (SDK v1), GORM/Postgres, gói `pkg/notification` sẵn có, `testing` chuẩn (repo không có testify).
+**Tech Stack:** Go 1.26, `aws-sdk-go v1.49.0` (SDK v1), GORM/Postgres, the existing `pkg/notification` package, standard `testing` (the repo has no testify).
 
 ---
 
 ## File Structure
 
-- `pkg/queue/sqs.go` — **Modify**: thêm `ReceiveMessages` + `DeleteMessage` (giữ nguyên `PublishOrderEvent`). Producer + consumer transport ở chung 1 file vì cùng một `SQSClient`.
-- `internal/worker/handlers.go` — **Create**: `Dispatcher` + ports `OrderStore`; logic xử lý từng `EventType`. Thuần logic, không chạm SQS.
-- `internal/worker/consumer.go` — **Create**: vòng lặp `ReceiveMessages → dispatch → DeleteMessage`, phụ thuộc port `messageReceiver`.
+- `pkg/queue/sqs.go` — **Modify**: add `ReceiveMessages` + `DeleteMessage` (keep `PublishOrderEvent` unchanged). Producer + consumer transport live in the same file because they share one `SQSClient`.
+- `internal/worker/handlers.go` — **Create**: `Dispatcher` + the `OrderStore` port; logic for handling each `EventType`. Pure logic, no SQS.
+- `internal/worker/consumer.go` — **Create**: the `ReceiveMessages → dispatch → DeleteMessage` loop, depending on the `messageReceiver` port.
 
-> **Lưu ý:** Theo yêu cầu của user, plan này **không viết unit test**. Verification dựa vào `go build ./...` + `go vet ./...` sạch và kịch bản chạy thật end-to-end ở Task 7 chương 7. Các port (`OrderStore`, `messageReceiver`) vẫn giữ để code rõ ràng và dễ thêm test sau nếu muốn.
-- `internal/worker/store.go` — **Create**: adapter GORM cho `OrderStore` (preload User để lấy email).
+> **Note:** Per the user's request, this plan writes **no unit tests**. Verification relies on a clean `go build ./...` + `go vet ./...` and the real end-to-end run scenario in Task 7 chapter 7. The ports (`OrderStore`, `messageReceiver`) are still kept so the code is clear and tests are easy to add later if desired.
+- `internal/worker/store.go` — **Create**: a GORM adapter for `OrderStore` (preloads User to get the email).
 - `cmd/worker/main.go` — **Create**: entrypoint, wiring, graceful shutdown.
-- `Makefile` — **Modify**: thêm target `worker:` + cập nhật `.PHONY`.
-- `docs/learning/sqs-explained.md` — **Create**: bài giải 7 chương.
+- `Makefile` — **Modify**: add a `worker:` target + update `.PHONY`.
+- `docs/learning/sqs-explained.md` — **Create**: the 7-chapter explainer.
 
-**Ports (định nghĩa 1 lần, dùng xuyên suốt):**
+**Ports (defined once, used throughout):**
 
 ```go
 // internal/worker/handlers.go
@@ -38,16 +38,16 @@ type messageReceiver interface {
 }
 ```
 
-`*queue.SQSClient` sẽ thỏa `messageReceiver` sau Task 1. `repository.OrderRepository` KHÔNG được dùng trực tiếp làm `OrderStore` (nó không preload `User`); ta dùng adapter riêng ở Task 5.
+`*queue.SQSClient` will satisfy `messageReceiver` after Task 1. `repository.OrderRepository` must NOT be used directly as `OrderStore` (it doesn't preload `User`); we use a dedicated adapter in Task 5.
 
 ---
 
-## Task 1: Thêm Receive/Delete vào SQSClient
+## Task 1: Add Receive/Delete to SQSClient
 
 **Files:**
 - Modify: `pkg/queue/sqs.go`
 
-- [ ] **Step 1: Thêm 2 method vào cuối `pkg/queue/sqs.go`**
+- [ ] **Step 1: Add 2 methods at the end of `pkg/queue/sqs.go`**
 
 ```go
 // ReceiveMessages long-polls the queue, returning up to maxMessages messages.
@@ -80,10 +80,10 @@ func (q *SQSClient) DeleteMessage(receiptHandle string) error {
 }
 ```
 
-- [ ] **Step 2: Build để chắc chắn compile**
+- [ ] **Step 2: Build to make sure it compiles**
 
 Run: `go build ./pkg/queue/`
-Expected: không lỗi (imports `aws`, `sqs`, `fmt` đã có sẵn trong file).
+Expected: no errors (the `aws`, `sqs`, `fmt` imports are already in the file).
 
 - [ ] **Step 3: Commit**
 
@@ -99,7 +99,7 @@ git commit -m "feat(queue): add ReceiveMessages and DeleteMessage to SQSClient"
 **Files:**
 - Create: `internal/worker/handlers.go`
 
-- [ ] **Step 1: Viết implementation** — tạo `internal/worker/handlers.go`
+- [ ] **Step 1: Write the implementation** — create `internal/worker/handlers.go`
 
 ```go
 package worker
@@ -180,10 +180,10 @@ func (d *Dispatcher) handleOrderPaid(event queue.OrderEvent) error {
 }
 ```
 
-- [ ] **Step 2: Build để xác nhận compile**
+- [ ] **Step 2: Build to confirm it compiles**
 
 Run: `go build ./internal/worker/`
-Expected: không lỗi.
+Expected: no errors.
 
 - [ ] **Step 3: Commit**
 
@@ -199,7 +199,7 @@ git commit -m "feat(worker): add event dispatcher with idempotent handlers"
 **Files:**
 - Create: `internal/worker/consumer.go`
 
-- [ ] **Step 1: Viết implementation** — tạo `internal/worker/consumer.go`
+- [ ] **Step 1: Write the implementation** — create `internal/worker/consumer.go`
 
 ```go
 package worker
@@ -280,10 +280,10 @@ func (c *Consumer) deleteQuietly(receiptHandle string) {
 }
 ```
 
-- [ ] **Step 2: Build để xác nhận compile**
+- [ ] **Step 2: Build to confirm it compiles**
 
 Run: `go build ./internal/worker/`
-Expected: không lỗi.
+Expected: no errors.
 
 - [ ] **Step 3: Commit**
 
@@ -294,12 +294,12 @@ git commit -m "feat(worker): add long-polling consumer loop with delete-on-succe
 
 ---
 
-## Task 4: GORM adapter cho OrderStore
+## Task 4: GORM adapter for OrderStore
 
 **Files:**
 - Create: `internal/worker/store.go`
 
-- [ ] **Step 1: Viết adapter** — tạo `internal/worker/store.go`
+- [ ] **Step 1: Write the adapter** — create `internal/worker/store.go`
 
 ```go
 package worker
@@ -336,7 +336,7 @@ func (s *gormOrderStore) UpdateOrder(id uint, updates map[string]interface{}) er
 - [ ] **Step 2: Build**
 
 Run: `go build ./internal/worker/`
-Expected: không lỗi.
+Expected: no errors.
 
 - [ ] **Step 3: Commit**
 
@@ -352,7 +352,7 @@ git commit -m "feat(worker): add GORM-backed OrderStore adapter"
 **Files:**
 - Create: `cmd/worker/main.go`
 
-- [ ] **Step 1: Viết entrypoint** — tạo `cmd/worker/main.go`
+- [ ] **Step 1: Write the entrypoint** — create `cmd/worker/main.go`
 
 ```go
 package main
@@ -404,15 +404,15 @@ func main() {
 }
 ```
 
-- [ ] **Step 2: Build toàn bộ**
+- [ ] **Step 2: Build everything**
 
 Run: `go build ./...`
-Expected: không lỗi.
+Expected: no errors.
 
-- [ ] **Step 3: Vet toàn bộ**
+- [ ] **Step 3: Vet everything**
 
 Run: `go vet ./...`
-Expected: vet sạch.
+Expected: clean vet.
 
 - [ ] **Step 4: Commit**
 
@@ -428,28 +428,28 @@ git commit -m "feat(worker): add cmd/worker entrypoint with graceful shutdown"
 **Files:**
 - Modify: `Makefile`
 
-- [ ] **Step 1: Sửa dòng `.PHONY`** (dòng 1) thêm `worker`
+- [ ] **Step 1: Edit the `.PHONY` line** (line 1) to add `worker`
 
-Từ:
+From:
 ```make
 .PHONY: server build dev install-dev swagger migrate-up migrate-down migrate-status migrate-create seed
 ```
-Thành:
+To:
 ```make
 .PHONY: server worker build dev install-dev swagger migrate-up migrate-down migrate-status migrate-create seed
 ```
 
-- [ ] **Step 2: Thêm target `worker` ngay sau target `server`** (sau dòng 7)
+- [ ] **Step 2: Add a `worker` target right after the `server` target** (after line 7)
 
 ```make
 worker:
 	APP_ENV=development go run cmd/worker/main.go
 ```
 
-- [ ] **Step 3: Kiểm tra make parse được**
+- [ ] **Step 3: Check that make parses**
 
 Run: `make -n worker`
-Expected: in ra `APP_ENV=development go run cmd/worker/main.go` (không thực thi).
+Expected: prints `APP_ENV=development go run cmd/worker/main.go` (without executing).
 
 - [ ] **Step 4: Commit**
 
@@ -460,42 +460,42 @@ git commit -m "build: add make worker target"
 
 ---
 
-## Task 7: Bài giải `docs/learning/sqs-explained.md`
+## Task 7: The explainer `docs/learning/sqs-explained.md`
 
 **Files:**
 - Create: `docs/learning/sqs-explained.md`
 
-Viết theo Hướng A (đi theo một message), 7 chương như spec. Mỗi chương: giải thích (tiếng Việt, thuật ngữ Anh) → trích code thật → hộp "🔍 Bên dưới" → bước hands-on nếu có.
+Write it following Approach A (follow a message), 7 chapters as in the spec. Each chapter: explanation (in Vietnamese, English technical terms kept) → real code excerpt → a "🔍 Under the hood" box → a hands-on step if applicable.
 
-- [ ] **Step 1: Viết khung + chương 1–3** (bức tranh lớn; đầu gửi; message trong queue)
+- [ ] **Step 1: Write the skeleton + chapters 1–3** (the big picture; the sending end; the message in the queue)
 
-Bắt buộc có:
-- Sơ đồ ASCII: `API service ──SendMessage──▶ [SQS queue] ◀──ReceiveMessage── Worker`, nhấn mạnh hai bên không gọi trực tiếp nhau.
-- Chương 2 trích nguyên `PublishOrderEvent` (`pkg/queue/sqs.go:45-64`) và đoạn publish trong `orderService.PlaceOrder` (`internal/service/orderService.go:77-87`); giải thích message body (JSON `OrderEvent`), message attribute `event_type`, `queueURL` lấy từ env qua `configs/appConfig.go:78`, và default credential chain (env → shared config → IAM role).
-- Chương 3 hộp 🔍: at-least-once delivery, visibility timeout (message "ẩn" sau khi nhận), standard vs FIFO, vì sao có thể nhận trùng → dẫn sang nhu cầu idempotency.
+Must include:
+- An ASCII diagram: `API service ──SendMessage──▶ [SQS queue] ◀──ReceiveMessage── Worker`, emphasizing that the two sides don't call each other directly.
+- Chapter 2 quotes `PublishOrderEvent` verbatim (`pkg/queue/sqs.go:45-64`) and the publish snippet in `orderService.PlaceOrder` (`internal/service/orderService.go:77-87`); explain the message body (JSON `OrderEvent`), the `event_type` message attribute, `queueURL` read from env via `configs/appConfig.go:78`, and the default credential chain (env → shared config → IAM role).
+- Chapter 3 🔍 box: at-least-once delivery, visibility timeout (the message is "hidden" after being received), standard vs FIFO, why duplicates can be received → leading into the need for idempotency.
 
-- [ ] **Step 2: Viết chương 4–5** (đầu nhận; xử lý lỗi)
+- [ ] **Step 2: Write chapters 4–5** (the receiving end; error handling)
 
-Bắt buộc có:
-- Chương 4 trích `Consumer.processOnce` (`internal/worker/consumer.go`) + `ReceiveMessages` (`pkg/queue/sqs.go`); giải thích long polling (`WaitTimeSeconds=20`), batch ≤10, và quy tắc vàng: **chỉ `DeleteMessage` sau khi handler thành công**; xóa bằng `ReceiptHandle` không phải order_id.
-- Chương 5 trích `handleOrderPaid` (đoạn idempotency guard); giải thích: handler lỗi → không xóa → message quay lại sau visibility timeout → retry → sau `maxReceiveCount` lần thì rớt **DLQ**. Giải thích idempotency: vì at-least-once nên `handleOrderPaid` phải check `order.Status == confirmed` trước khi hành động; ghi chú khi nào cần bảng `processed_events`.
+Must include:
+- Chapter 4 quotes `Consumer.processOnce` (`internal/worker/consumer.go`) + `ReceiveMessages` (`pkg/queue/sqs.go`); explain long polling (`WaitTimeSeconds=20`), batch ≤10, and the golden rule: **only `DeleteMessage` after the handler succeeds**; delete by `ReceiptHandle`, not order_id.
+- Chapter 5 quotes `handleOrderPaid` (the idempotency guard snippet); explain: handler error → don't delete → the message returns after the visibility timeout → retry → after `maxReceiveCount` attempts it lands in the **DLQ**. Explain idempotency: because of at-least-once, `handleOrderPaid` must check `order.Status == confirmed` before acting; note when a `processed_events` table is needed.
 
-- [ ] **Step 3: Viết chương 6–7** (config AWS thật; chạy thật)
+- [ ] **Step 3: Write chapters 6–7** (real AWS config; running it for real)
 
-Chương 6 — bắt buộc có lệnh CLI chạy được:
+Chapter 6 — must include runnable CLI commands:
 ```bash
-# DLQ trước
+# DLQ first
 aws sqs create-queue --queue-name order-events-dlq
 
-# Lấy ARN của DLQ
+# Get the DLQ's ARN
 aws sqs get-queue-attributes --queue-url <DLQ_URL> \
   --attribute-names QueueArn
 
-# Main queue trỏ redrive sang DLQ, tối đa 5 lần nhận
+# Main queue pointing its redrive to the DLQ, max 5 receives
 aws sqs create-queue --queue-name order-events \
   --attributes '{"RedrivePolicy":"{\"deadLetterTargetArn\":\"<DLQ_ARN>\",\"maxReceiveCount\":\"5\"}"}'
 ```
-+ IAM least-privilege, 2 policy tách biệt:
++ IAM least-privilege, 2 separate policies:
 ```json
 // API service (producer)
 { "Effect": "Allow", "Action": ["sqs:SendMessage"], "Resource": "<main-queue-arn>" }
@@ -504,13 +504,13 @@ aws sqs create-queue --queue-name order-events \
   "Action": ["sqs:ReceiveMessage","sqs:DeleteMessage","sqs:GetQueueAttributes"],
   "Resource": "<main-queue-arn>" }
 ```
-Giải thích vì sao không dùng chung 1 credential full-access; nối env `AWS_REGION` + `AWS_SQS_ORDER_QUEUE_URL`.
+Explain why not to share one full-access credential; connect the env `AWS_REGION` + `AWS_SQS_ORDER_QUEUE_URL`.
 
-Chương 7 — kịch bản kiểm chứng có thứ tự lệnh:
-1. `make server` (terminal A), đặt 1 đơn qua API.
-2. `aws sqs receive-message --queue-url <URL>` thủ công → thấy message (rồi để nó quay lại sau visibility timeout).
-3. `make worker` (terminal B) → quan sát log xử lý + message biến mất.
-4. Cố ý `return errors.New("test")` đầu `handleOrderPlaced` → quan sát message quay lại nhiều lần rồi rớt DLQ (xem queue `order-events-dlq` trên Console).
+Chapter 7 — a verification scenario with an ordered sequence of commands:
+1. `make server` (terminal A), place 1 order via the API.
+2. `aws sqs receive-message --queue-url <URL>` manually → see the message (then let it return after the visibility timeout).
+3. `make worker` (terminal B) → observe the processing logs + the message disappearing.
+4. Deliberately `return errors.New("test")` at the top of `handleOrderPlaced` → observe the message returning several times then landing in the DLQ (check the `order-events-dlq` queue in the Console).
 
 - [ ] **Step 4: Commit**
 
@@ -521,15 +521,15 @@ git commit -m "docs(learning): add SQS explainer following a message end-to-end"
 
 ---
 
-## Task 8: Cập nhật README (liên kết bài giải)
+## Task 8: Update the README (link the explainer)
 
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1:** Tại mục SQS/services trong README, thêm 1 dòng trỏ tới bài giải và lệnh `make worker`:
+- [ ] **Step 1:** In the SQS/services section of the README, add a line pointing to the explainer and the `make worker` command:
 
 ```markdown
-- **Worker (consumer):** chạy `make worker` để xử lý order events. Xem giải thích chi tiết cơ chế SQS tại [docs/learning/sqs-explained.md](docs/learning/sqs-explained.md).
+- **Worker (consumer):** run `make worker` to process order events. See a detailed explanation of the SQS mechanics at [docs/learning/sqs-explained.md](docs/learning/sqs-explained.md).
 ```
 
 - [ ] **Step 2: Commit**
@@ -541,14 +541,14 @@ git commit -m "docs: link SQS explainer and worker command from README"
 
 ---
 
-## Self-Review (đã chạy)
+## Self-Review (done)
 
-**Spec coverage:** (1) Receive/Delete → Task 1 ✓; (2) consumer cmd/worker + internal/worker → Task 2,3,4,5 ✓; (3) Makefile worker → Task 6 ✓; (4) bài giải 7 chương → Task 7 ✓; (5) config AWS + IAM → Task 7 chương 6 ✓; bảng lỗi → chương 5 ✓; idempotency/graceful shutdown/DLQ → Task 2/5 + chương 5 ✓.
+**Spec coverage:** (1) Receive/Delete → Task 1 ✓; (2) consumer cmd/worker + internal/worker → Task 2,3,4,5 ✓; (3) Makefile worker → Task 6 ✓; (4) 7-chapter explainer → Task 7 ✓; (5) AWS config + IAM → Task 7 chapter 6 ✓; error table → chapter 5 ✓; idempotency/graceful shutdown/DLQ → Task 2/5 + chapter 5 ✓.
 
-**Sai khác so với spec:** Spec mục "Testing & error handling" có unit test cho dispatch/handler — **user yêu cầu bỏ unit test**, nên plan thay bằng `go build`/`go vet` + kịch bản chạy thật ở chương 7. Bảng lỗi thường gặp vẫn giữ trong bài giải.
+**Deviations from the spec:** The spec's "Testing & error handling" section had unit tests for dispatch/handlers — **the user requested dropping unit tests**, so the plan replaces them with `go build`/`go vet` + the real run scenario in chapter 7. The common-errors table is still kept in the explainer.
 
-**Placeholder scan:** không còn TBD/TODO; mọi step code có code đầy đủ.
+**Placeholder scan:** no remaining TBD/TODO; every code step has complete code.
 
-**Type consistency:** `NewDispatcher(OrderStore, NotificationClient)`, `Dispatcher.Handle(queue.OrderEvent) error`, `NewConsumer(messageReceiver, func(queue.OrderEvent) error)`, `NewGormOrderStore(*gorm.DB) OrderStore`, `ReceiveMessages(int64,int64)`/`DeleteMessage(string)` — khớp giữa các task và với `queue.OrderEvent`/`queue.EventOrder*`/`domain.OrderStatusConfirmed`/`notification.NotificationClient` thực tế trong repo.
+**Type consistency:** `NewDispatcher(OrderStore, NotificationClient)`, `Dispatcher.Handle(queue.OrderEvent) error`, `NewConsumer(messageReceiver, func(queue.OrderEvent) error)`, `NewGormOrderStore(*gorm.DB) OrderStore`, `ReceiveMessages(int64,int64)`/`DeleteMessage(string)` — consistent across tasks and with the actual `queue.OrderEvent`/`queue.EventOrder*`/`domain.OrderStatusConfirmed`/`notification.NotificationClient` in the repo.
 
-**Quyết định chốt từ spec:** EventType lạ → log + xóa (không chặn queue). Poison message (không parse được) → log + xóa. Cả hai đã có test.
+**Decisions locked from the spec:** unknown EventType → log + delete (don't block the queue). Poison message (unparseable) → log + delete. Both are covered.

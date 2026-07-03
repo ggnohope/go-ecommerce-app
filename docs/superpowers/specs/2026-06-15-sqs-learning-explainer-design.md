@@ -1,171 +1,178 @@
-# Design: Bài giải AWS SQS + xây consumer cho go-ecommerce-app
+# Design: AWS SQS explainer + building the consumer for go-ecommerce-app
 
-**Ngày:** 2026-06-15
-**Trạng thái:** Đã duyệt thiết kế, chờ review spec trước khi lập plan
+**Date:** 2026-06-15
+**Status:** Design approved, pending spec review before drafting the plan
 
-## Mục tiêu
+## Goal
 
-Giúp user thực sự hiểu "cái gì chạy bên dưới" khi go-ecommerce-app dùng AWS SQS — không chỉ
-đọc code AI generate. Đạt được bằng cách: (1) một bài giải dạng kể chuyện bám theo hành trình
-một message, và (2) xây nốt phần **consumer/worker còn thiếu** để user chạy được full loop
-`send → receive → process → delete` trên **AWS thật**.
+Help the user genuinely understand "what runs underneath" when go-ecommerce-app uses AWS SQS — not
+just read AI-generated code. Achieved by: (1) a narrative-style explainer following the journey of a
+single message, and (2) building the **missing consumer/worker** so the user can run the full loop
+`send → receive → process → delete` against **real AWS**.
 
-Trình độ người học: biết AWS cơ bản (credential, region, đã dùng vài service), nhưng chưa nắm
-cơ chế SQS và message queue. Vì vậy giải thích **sâu** phần SQS/queue mechanics, **không** giảng
-lại phần AWS account/credential cơ bản.
+Learner level: knows AWS basics (credentials, region, has used a few services) but hasn't grasped
+the mechanics of SQS and message queues. So explain the SQS/queue mechanics **deeply**, and do
+**not** re-teach the basic AWS account/credential material.
 
-## Bối cảnh code hiện tại (đã khảo sát)
+## Current code context (surveyed)
 
-- `pkg/queue/sqs.go`: **chỉ có producer** — `PublishOrderEvent` → `SendMessage`. Định nghĩa
-  `OrderEvent{EventType, OrderID, UserID, Amount}` và 3 event type: `ORDER_PLACED`,
-  `ORDER_PAID`, `ORDER_SHIPPED` (cái cuối định nghĩa nhưng chưa publish).
-- `internal/service/orderService.go`: publish `ORDER_PLACED` trong `PlaceOrder`, publish
-  `ORDER_PAID` trong `HandleStripeEvent` (khi `payment_intent.succeeded`). SQS là optional
-  (nil-check), publish lỗi chỉ log chứ không fail request.
-- `configs/appConfig.go`: khởi tạo `SQSClient` từ env `AWS_REGION` + `AWS_SQS_ORDER_QUEUE_URL`;
-  optional, thiếu env thì disable order events.
-- **Chưa có consumer nào** (`grep` ReceiveMessage/DeleteMessage/worker/consumer = rỗng).
-- `infra/` rỗng → **không có IaC**, AWS config thủ công qua Console/CLI.
-- SDK: `aws-sdk-go v1.49.0` (SDK v1). Auth qua default credential chain.
-- `pkg/notification`: `NotificationClient` interface có `SendEmail(to, subject, body)` và
-  `SendSMS(to, message)` — worker sẽ tái dùng để xử lý event.
-- Makefile theo pattern target đơn giản (`server:`, `dev:`, `build:`...).
+- `pkg/queue/sqs.go`: **producer only** — `PublishOrderEvent` → `SendMessage`. Defines
+  `OrderEvent{EventType, OrderID, UserID, Amount}` and 3 event types: `ORDER_PLACED`, `ORDER_PAID`,
+  `ORDER_SHIPPED` (the last one defined but not yet published).
+- `internal/service/orderService.go`: publishes `ORDER_PLACED` in `PlaceOrder`, publishes
+  `ORDER_PAID` in `HandleStripeEvent` (on `payment_intent.succeeded`). SQS is optional (nil-check);
+  a publish error only logs rather than failing the request.
+- `configs/appConfig.go`: initializes `SQSClient` from the env vars `AWS_REGION` +
+  `AWS_SQS_ORDER_QUEUE_URL`; optional — order events are disabled if the env is missing.
+- **No consumer yet** (`grep` for ReceiveMessage/DeleteMessage/worker/consumer = empty).
+- `infra/` is empty → **no IaC**, AWS configured manually via Console/CLI.
+- SDK: `aws-sdk-go v1.49.0` (SDK v1). Auth via the default credential chain.
+- `pkg/notification`: the `NotificationClient` interface has `SendEmail(to, subject, body)` and
+  `SendSMS(to, message)` — the worker will reuse these to process events.
+- The Makefile follows a simple target pattern (`server:`, `dev:`, `build:`, ...).
 
-**Phát hiện cốt lõi:** user đang thấy nửa vòng lặp (gửi đi) mà chưa thấy nửa nhận/xử lý — đúng
-chỗ làm "cái gì chạy bên dưới" trở nên mơ hồ nhất.
+**Core finding:** the user sees half the loop (sending) but not the receiving/processing half —
+exactly where "what runs underneath" is most opaque.
 
-## Hướng tiếp cận đã chọn
+## Chosen approach
 
-**Hướng A — "Đi theo một message".** Bài giải kể chuyện bám hành trình một đơn hàng; mỗi khái
-niệm SQS được giải thích ngay khi xuất hiện trong dòng chảy, gắn với code thật + bước hands-on.
-(Loại bỏ Hướng B "lý thuyết trước" và Hướng C "code-first tối giản" vì không đạt mục tiêu hiểu sâu.)
+**Approach A — "Follow a message".** A narrative explainer following the journey of one order; each
+SQS concept is explained the moment it appears in the flow, tied to real code + a hands-on step.
+(Rejected Approach B "theory first" and Approach C "minimal code-first" because they don't achieve
+deep understanding.)
 
 ## Deliverables
 
-Tạo trong repo (không phá code cũ):
+Created in the repo (without breaking existing code):
 
 ```
-cmd/worker/main.go              # entrypoint: load config, init consumer, chạy poll loop + graceful shutdown
-internal/worker/consumer.go     # vòng lặp ReceiveMessage → dispatch → DeleteMessage
-internal/worker/handlers.go     # xử lý từng EventType (gửi notification, cập nhật trạng thái)
-internal/worker/handlers_test.go# unit test dispatch + handler (SQS giả lập qua interface)
-pkg/queue/sqs.go                # THÊM ReceiveMessages() + DeleteMessage(), giữ nguyên Publish
-docs/learning/sqs-explained.md  # bài giải Hướng A
-Makefile                        # THÊM target `worker:`
+cmd/worker/main.go              # entrypoint: load config, init consumer, run poll loop + graceful shutdown
+internal/worker/consumer.go     # loop: ReceiveMessage → dispatch → DeleteMessage
+internal/worker/handlers.go     # handle each EventType (send notification, update status)
+internal/worker/handlers_test.go# unit test for dispatch + handlers (SQS mocked via an interface)
+pkg/queue/sqs.go                # ADD ReceiveMessages() + DeleteMessage(), keep Publish unchanged
+docs/learning/sqs-explained.md  # the Approach A explainer
+Makefile                        # ADD a `worker:` target
 ```
 
-Lý do tách `cmd/worker` riêng: phản ánh mô hình thật — API service (producer) và worker
-(consumer) là 2 process độc lập, scale/deploy riêng. Đây chính là giá trị của SQS: hai bên không
-gọi trực tiếp nhau.
+Why split `cmd/worker` out: it reflects the real model — the API service (producer) and the worker
+(consumer) are 2 independent processes, scaled/deployed separately. This is precisely the value of
+SQS: the two sides don't call each other directly.
 
-## Dàn ý bài giải (`docs/learning/sqs-explained.md`)
+## Explainer outline (`docs/learning/sqs-explained.md`)
 
-Mỗi chương: giải thích (tiếng Việt, thuật ngữ Anh giữ nguyên) → trích code thật → hộp "🔍 Bên
-dưới" giải thích internals → (nếu có) bước hands-on.
+Each chapter: explanation (in Vietnamese, English terms kept as-is) → real code excerpt → a "🔍 Under
+the hood" box explaining internals → (where applicable) a hands-on step.
 
-1. **Bức tranh lớn** — vì sao cần queue; sơ đồ API service và worker không gọi trực tiếp nhau,
-   SQS đứng giữa; vấn đề giải quyết (decoupling, chịu tải, retry).
-2. **Đầu gửi (code đã có)** — soi `PlaceOrder` → `PublishOrderEvent` → `SendMessage`; message
-   body, message attributes, queue URL từ đâu, default credential chain.
-3. **Message nằm trong queue** — 🔍 SQS lưu message ra sao; at-least-once delivery; visibility
-   timeout (vì sao message "biến mất" tạm thời); standard vs FIFO; vì sao có thể nhận trùng.
-4. **Đầu nhận (ta xây)** — long polling vs short polling; `ReceiveMessage` lấy batch; xử lý rồi
-   bắt buộc `DeleteMessage`; không xóa thì sao.
-5. **Khi xử lý lỗi** — message quay lại queue; retry; Dead Letter Queue; idempotency (handler
-   phải chịu được chạy trùng do at-least-once).
-6. **Config AWS thật** — tạo queue + DLQ; IAM least-privilege; set env.
-7. **Chạy thật** — đặt đơn → xem message trong queue → chạy worker → thấy xử lý + xóa; quan sát
-   visibility timeout; cố ý làm handler lỗi để thấy retry và rớt DLQ.
+1. **The big picture** — why a queue is needed; a diagram of the API service and worker not calling
+   each other directly, with SQS in between; the problems it solves (decoupling, load handling, retry).
+2. **The sending end (existing code)** — walk through `PlaceOrder` → `PublishOrderEvent` →
+   `SendMessage`; message body, message attributes, where the queue URL comes from, the default
+   credential chain.
+3. **The message sits in the queue** — 🔍 how SQS stores a message; at-least-once delivery;
+   visibility timeout (why a message "disappears" temporarily); standard vs FIFO; why duplicates can
+   be received.
+4. **The receiving end (we build it)** — long polling vs short polling; `ReceiveMessage` fetching a
+   batch; process then mandatory `DeleteMessage`; what happens if you don't delete.
+5. **When processing fails** — the message returns to the queue; retry; Dead Letter Queue;
+   idempotency (the handler must tolerate running twice due to at-least-once).
+6. **Real AWS config** — create the queue + DLQ; IAM least-privilege; set the env.
+7. **Run it for real** — place an order → see the message in the queue → run the worker → watch it
+   process + delete; observe the visibility timeout; deliberately make the handler fail to see retry
+   and landing in the DLQ.
 
-## Thiết kế consumer
+## Consumer design
 
-### Bổ sung `pkg/queue/sqs.go`
+### Additions to `pkg/queue/sqs.go`
 
 ```go
-// ReceiveMessages: long polling, tối đa maxMessages (<=10) mỗi lần
+// ReceiveMessages: long polling, up to maxMessages (<=10) per call
 func (q *SQSClient) ReceiveMessages(maxMessages int64, waitSeconds int64) ([]*sqs.Message, error)
-// DeleteMessage: xóa sau khi xử lý xong, dùng ReceiptHandle (KHÔNG phải message ID)
+// DeleteMessage: delete after processing completes, using the ReceiptHandle (NOT the message ID)
 func (q *SQSClient) DeleteMessage(receiptHandle string) error
 ```
-Điểm dạy: `WaitTimeSeconds` (long polling giảm cost + latency), `MaxNumberOfMessages` (batch ≤10),
-vì sao xóa bằng `ReceiptHandle` chứ không phải `OrderID`. Cũng request `MessageAttributeNames`
-để đọc lại `event_type` attribute mà producer gắn.
+Teaching points: `WaitTimeSeconds` (long polling reduces cost + latency), `MaxNumberOfMessages`
+(batch ≤10), why you delete by `ReceiptHandle` rather than `OrderID`. Also request
+`MessageAttributeNames` to read back the `event_type` attribute the producer attached.
 
-### `internal/worker/consumer.go` — vòng lặp chính
+### `internal/worker/consumer.go` — the main loop
 
 ```
 for {
     msgs = ReceiveMessages(10, 20)            // long poll 20s
     for each msg:
         event = json.Unmarshal(msg.Body)      // parse OrderEvent
-        err = dispatch(event)                 // gọi handler theo EventType
+        err = dispatch(event)                 // call the handler by EventType
         if err == nil:
-            DeleteMessage(msg.ReceiptHandle)  // CHỈ xóa khi thành công
+            DeleteMessage(msg.ReceiptHandle)  // ONLY delete on success
         else:
-            log + KHÔNG xóa → quay lại sau visibility timeout → retry → (n lần) → DLQ
+            log + DON'T delete → returns after the visibility timeout → retry → (n times) → DLQ
 }
 ```
-Quyết định cốt lõi: **xóa message sau khi xử lý thành công, không phải sau khi nhận** — đây là
-cách SQS đảm bảo không mất việc và là lý do at-least-once tồn tại.
+Core decision: **delete the message after successful processing, not after receiving** — this is how
+SQS guarantees no work is lost, and the reason at-least-once exists.
 
-### `internal/worker/handlers.go` — dispatch theo EventType
+### `internal/worker/handlers.go` — dispatch by EventType
 
-- `ORDER_PLACED` → gửi email xác nhận đơn (qua `NotificationClient`).
-- `ORDER_PAID` → gửi email "đã thanh toán" / kích hoạt fulfillment.
-- Mỗi handler nhận `OrderEvent` đã parse, trả `error`. Lỗi → không xóa → retry.
-- EventType lạ → log warning + xóa (tránh kẹt poison message vô hạn) HOẶC để rớt DLQ — chốt
-  trong plan; mặc định: log + xóa để không chặn queue.
+- `ORDER_PLACED` → send an order-confirmation email (via `NotificationClient`).
+- `ORDER_PAID` → send a "paid" email / trigger fulfillment.
+- Each handler takes a parsed `OrderEvent` and returns an `error`. On error → don't delete → retry.
+- Unknown EventType → log a warning + delete (avoid getting stuck on a poison message forever) OR let
+  it fall to the DLQ — decided in the plan; default: log + delete so the queue isn't blocked.
 
 ### Idempotency
 
-Vì at-least-once, handler phải chịu được chạy trùng. Minh hoạ pattern đơn giản: check trạng thái
-order trong DB trước khi hành động (nếu đã ở trạng thái đích thì bỏ qua). Ghi chú khi nào cần bảng
-`processed_events` riêng (dedup theo message/event ID).
+Because of at-least-once, the handler must tolerate running twice. Illustrate a simple pattern: check
+the order's status in the DB before acting (if it is already in the target state, skip). Note when a
+dedicated `processed_events` table is needed (dedup by message/event ID).
 
 ### Graceful shutdown
 
-Bắt `SIGINT`/`SIGTERM`: dừng nhận message mới, xử lý nốt batch hiện tại rồi thoát. Dạy: vì sao an
-toàn — message chưa `DeleteMessage` sẽ tự quay lại sau visibility timeout.
+Catch `SIGINT`/`SIGTERM`: stop receiving new messages, finish processing the current batch, then
+exit. Teach why this is safe — a message not yet `DeleteMessage`-d automatically returns after the
+visibility timeout.
 
 ### Makefile
 
-Thêm target `worker:` chạy `go run cmd/worker/main.go`, đồng bộ style với `server:`.
+Add a `worker:` target that runs `go run cmd/worker/main.go`, matching the style of `server:`.
 
-## Config AWS thật + IAM
+## Real AWS config + IAM
 
-1. **Tạo queue**: main queue `order-events` + DLQ `order-events-dlq`, gắn redrive policy
-   `maxReceiveCount=5`. Hướng dẫn cả Console lẫn `aws sqs create-queue` CLI.
-2. **Queue URL** → đặt vào `AWS_SQS_ORDER_QUEUE_URL`.
-3. **IAM least-privilege** — 2 policy tách biệt:
-   - API service (producer): chỉ `sqs:SendMessage` trên main queue.
+1. **Create queues**: main queue `order-events` + DLQ `order-events-dlq`, with a redrive policy
+   `maxReceiveCount=5`. Show both the Console and the `aws sqs create-queue` CLI.
+2. **Queue URL** → set it into `AWS_SQS_ORDER_QUEUE_URL`.
+3. **IAM least-privilege** — 2 separate policies:
+   - API service (producer): only `sqs:SendMessage` on the main queue.
    - Worker (consumer): `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes`.
-   - Giải thích vì sao không dùng chung 1 credential full-access.
-4. **Credential local dev**: profile/`~/.aws/credentials` hoặc env, nối lại với default
-   credential chain ở chương 2.
-5. **Kiểm chứng**: đặt đơn qua API → `aws sqs receive-message` thủ công → chạy worker → thấy xử
-   lý + biến mất; cố ý lỗi handler để quan sát retry + DLQ.
+   - Explain why not to share one full-access credential.
+4. **Local dev credentials**: profile/`~/.aws/credentials` or env, tying back to the default
+   credential chain from chapter 2.
+5. **Verification**: place an order via the API → `aws sqs receive-message` manually → run the worker
+   → watch it process + disappear; deliberately fail the handler to observe retry + DLQ.
 
 ## Testing & error handling (Section 5)
 
-- **Unit test** (`handlers_test.go`): tách logic xử lý khỏi I/O SQS. `dispatch` và handler nhận
-  `OrderEvent` + một `NotificationClient` giả lập (fake/stub), assert đúng hành vi (gọi đúng
-  email, trả error đúng lúc). Consumer loop dựa trên một interface SQS nhỏ để test poll/delete
-  bằng fake, không cần AWS thật.
-- **Bảng lỗi thường gặp** trong bài giải: credential sai/thiếu, queue URL sai region,
-  message body không parse được (poison message), handler timeout > visibility timeout (xử lý
-  trùng), quên DeleteMessage (xử lý lặp vô hạn) — mỗi lỗi kèm triệu chứng + cách nhận biết.
+- **Unit test** (`handlers_test.go`): separate the processing logic from SQS I/O. `dispatch` and the
+  handlers take an `OrderEvent` + a mocked `NotificationClient` (fake/stub), asserting correct
+  behavior (right email sent, error returned at the right time). The consumer loop relies on a small
+  SQS interface so poll/delete can be tested with a fake, without real AWS.
+- **A table of common errors** in the explainer: wrong/missing credentials, queue URL in the wrong
+  region, a message body that won't parse (poison message), handler timeout > visibility timeout
+  (duplicate processing), forgetting DeleteMessage (infinite reprocessing) — each with symptoms + how
+  to recognize it.
 
-## Phạm vi loại trừ (YAGNI)
+## Out of scope (YAGNI)
 
-- Không thêm IaC/Terraform (giữ config thủ công theo hiện trạng).
-- Không nâng SDK lên v2 (giữ `aws-sdk-go v1` đồng bộ phần còn lại của repo).
-- Không xây bảng `processed_events` thật — chỉ giải thích khi nào cần.
-- Không động vào FIFO queue ngoài phần giải thích khái niệm (queue thật dùng standard).
+- No IaC/Terraform (keep manual config as it currently is).
+- No SDK upgrade to v2 (keep `aws-sdk-go v1` in sync with the rest of the repo).
+- No real `processed_events` table — only explain when it's needed.
+- No touching FIFO queues beyond explaining the concept (the real queue uses standard).
 
-## Tiêu chí thành công
+## Success criteria
 
-- User đọc bài giải và giải thích lại được: visibility timeout, at-least-once, long polling, DLQ,
-  idempotency là gì và vì sao consumer xóa message *sau* khi xử lý.
-- `make worker` chạy được, nối tới AWS thật, nhận và xử lý `ORDER_PLACED`/`ORDER_PAID` rồi xóa.
-- Quan sát được retry + rớt DLQ khi handler cố ý lỗi.
-- Unit test cho dispatch/handler pass.
+- The user reads the explainer and can re-explain: what visibility timeout, at-least-once, long
+  polling, DLQ, and idempotency are, and why the consumer deletes the message *after* processing.
+- `make worker` runs, connects to real AWS, receives and processes `ORDER_PLACED`/`ORDER_PAID`, then
+  deletes.
+- Retry + landing in the DLQ can be observed when the handler deliberately fails.
+- The unit tests for dispatch/handlers pass.
